@@ -494,6 +494,7 @@ async function initTree() {
   el('locked-msg').classList.add('hidden');
   el('reuse-results').classList.add('hidden');
   el('forgery-area').classList.add('hidden');
+  el('forgery-result').classList.add('hidden');
   el('forgery-prereq-msg').classList.remove('hidden');
   el<HTMLButtonElement>('btn-sign-b').disabled = true;
   el<HTMLButtonElement>('btn-sign').disabled = false;
