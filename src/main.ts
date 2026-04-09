@@ -41,7 +41,7 @@ const LEAF_COUNT = 1 << H;
 
 function renderApp(): string {
   const keyCells = Array.from({ length: LEAF_COUNT }, (_, i) =>
-    `<div class="key-cell" id="key-cell-${i}" data-index="${i}">${i}</div>`
+    `<div class="key-cell" id="key-cell-${i}" data-index="${i}" role="img" aria-label="Key ${i}: available">${i}</div>`
   ).join('');
 
   const hssL1 = Array.from({ length: 8 }, (_, i) =>
@@ -58,6 +58,8 @@ function renderApp(): string {
   <span>Generating LMS tree (32 W-OTS+ keypairs)\u2026</span>
 </div>
 
+<a class="skip-link" href="#section-a">Skip to content</a>
+
 <header class="site-header">
   <div class="container">
     <div class="header-titles">
@@ -68,7 +70,7 @@ function renderApp(): string {
   </div>
 </header>
 
-<nav class="site-nav">
+<nav class="site-nav" aria-label="Section navigation">
   <div class="container">
     <a href="#section-a">A &middot; What is LMS?</a>
     <a href="#section-b">B &middot; Key State Visualizer</a>
@@ -109,7 +111,8 @@ function renderApp(): string {
     <p>Stateless schemes like SPHINCS+ (FIPS 205) avoid state but pay in signature size (~8 KB for SPHINCS+-SHA-256-128s). LMS signatures (~1.6 KB at h=10) are 5&times; smaller &mdash; decisive when signatures must fit in firmware manifest headers or be transmitted over constrained IoT channels. Verification requires only hash operations (no field arithmetic).</p>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Property</th><th>LMS (h=10)</th><th>SPHINCS+-128s</th><th>Ed25519</th></tr></thead>
+        <caption class="sr-only">Comparison of LMS, SPHINCS+, and Ed25519 signature schemes</caption>
+        <thead><tr><th scope="col">Property</th><th scope="col">LMS (h=10)</th><th scope="col">SPHINCS+-128s</th><th scope="col">Ed25519</th></tr></thead>
         <tbody>
           <tr><td>Public key</td><td>64 bytes</td><td>32 bytes</td><td>32 bytes</td></tr>
           <tr><td>Signature</td><td>~1.6 KB</td><td>~8 KB</td><td>64 bytes</td></tr>
@@ -136,7 +139,7 @@ function renderApp(): string {
       <span class="state-counter-value" id="counter-value">nextIndex = 0</span>
       <span class="state-remaining" id="counter-remaining">32 signatures remaining</span>
     </div>
-    <div class="key-grid" id="key-grid">${keyCells}</div>
+    <div class="key-grid" id="key-grid" role="group" aria-label="LMS key state grid — 32 one-time keys">${keyCells}</div>
     <div class="flex-row" style="gap:0.5rem;flex-wrap:wrap;font-size:0.75rem;">
       <span style="color:var(--key-available-text)">&#9632; Available</span>
       <span style="color:var(--key-used-text)">&#9632; Used</span>
@@ -155,7 +158,7 @@ function renderApp(): string {
         <button class="btn btn-primary" id="btn-sign">&#9997; Sign Message</button>
         <button class="btn btn-secondary" id="btn-reset-tree">&#8635; Reset Tree</button>
       </div>
-      <div id="sign-result" class="hidden mt-2">
+      <div id="sign-result" class="hidden mt-2" aria-live="polite">
         <hr class="divider">
         <div class="result-panel" id="sign-result-content"></div>
       </div>
@@ -174,7 +177,7 @@ function renderApp(): string {
         <textarea id="verify-sig-display" rows="3" readonly placeholder="Signature will appear here\u2026"></textarea>
       </div>
       <button class="btn btn-primary" id="btn-verify" disabled>&#10003; Verify</button>
-      <div id="verify-result" class="hidden mt-2">
+      <div id="verify-result" class="hidden mt-2" aria-live="polite">
         <hr class="divider">
         <div id="verify-result-content"></div>
       </div>
@@ -206,7 +209,7 @@ function renderApp(): string {
   <div class="card">
     <h3>C2 &mdash; Live reuse demonstration</h3>
     <div class="toggle-row">
-      <label class="toggle"><input type="checkbox" id="reuse-toggle"><span class="toggle-slider"></span></label>
+      <label class="toggle" for="reuse-toggle"><input type="checkbox" id="reuse-toggle" aria-describedby="reuse-toggle-label"><span class="toggle-slider" aria-hidden="true"></span></label>
       <span class="toggle-label" id="reuse-toggle-label">Force Key Reuse (disabled)</span>
     </div>
     <div id="reuse-sign-area">
@@ -223,8 +226,8 @@ function renderApp(): string {
         <button class="btn btn-primary" id="btn-sign-b" disabled>Sign B (same leaf)</button>
       </div>
     </div>
-    <div id="reuse-warning" class="warning-banner hidden">&#9888; REUSE DETECTED &mdash; Two signatures from the same one-time key. The key is now compromised.</div>
-    <div id="locked-msg" class="locked-msg hidden">&#128308; KEY COMPROMISED &mdash; Generate a new tree (Reset Tree in Section B) to continue normal signing.</div>
+    <div id="reuse-warning" class="warning-banner hidden" role="alert">&#9888; REUSE DETECTED &mdash; Two signatures from the same one-time key. The key is now compromised.</div>
+    <div id="locked-msg" class="locked-msg hidden" role="alert">&#128308; KEY COMPROMISED &mdash; Generate a new tree (Reset Tree in Section B) to continue normal signing.</div>
     <div id="reuse-results" class="hidden">
       <hr class="divider">
       <div class="sig-compare" id="sig-compare-display"></div>
@@ -240,7 +243,7 @@ function renderApp(): string {
         <textarea id="forgery-target-msg" rows="2">Firmware v4.0.0 &mdash; attacker-controlled payload</textarea>
       </div>
       <button class="btn btn-danger" id="btn-forge">&#128275; Demonstrate Forgery</button>
-      <div id="forgery-result" class="hidden mt-2"><div id="forgery-result-content"></div></div>
+      <div id="forgery-result" class="hidden mt-2" aria-live="polite"><div id="forgery-result-content"></div></div>
     </div>
   </div>
   <div class="card">
@@ -265,7 +268,8 @@ function renderApp(): string {
     <p>A single LMS tree with h=5 supports only 32 signatures. For deployment:</p>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Height h</th><th>Signatures</th><th>Use case</th></tr></thead>
+        <caption class="sr-only">LMS tree heights and signature capacities</caption>
+        <thead><tr><th scope="col">Height h</th><th scope="col">Signatures</th><th scope="col">Use case</th></tr></thead>
         <tbody>
           <tr><td>h = 5</td><td>32</td><td>Demo / testing</td></tr>
           <tr><td>h = 10</td><td>1,024</td><td>Certificate authority, infrequent signing</td></tr>
@@ -330,7 +334,8 @@ function renderApp(): string {
     <h3>E3 &mdash; Comparison with SPHINCS+ and XMSS</h3>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Property</th><th>LMS/HSS</th><th>XMSS/XMSS-MT</th><th>SPHINCS+</th></tr></thead>
+        <caption class="sr-only">Comparison of LMS/HSS, XMSS, and SPHINCS+ post-quantum signature schemes</caption>
+        <thead><tr><th scope="col">Property</th><th scope="col">LMS/HSS</th><th scope="col">XMSS/XMSS-MT</th><th scope="col">SPHINCS+</th></tr></thead>
         <tbody>
           <tr><td>Standard</td><td>SP 800-208</td><td>SP 800-208</td><td>FIPS 205</td></tr>
           <tr><td>Stateful</td><td><span class="text-warning">Yes</span></td><td><span class="text-warning">Yes</span></td><td><span class="text-accent">No</span></td></tr>
@@ -390,14 +395,19 @@ function updateKeyGrid() {
     const cell = el<HTMLElement>(`key-cell-${i}`);
     if (!cell) continue;
     cell.className = 'key-cell';
+    let state = 'available';
     if (reuseDetected && i === reuseLeafIndex) {
       cell.classList.add('reused');
+      state = 'reused — compromised';
     } else if (tree.otsKeys[i].used) {
       cell.classList.add('used');
+      state = 'used';
     }
     if (i === tree.nextIndex && !reuseDetected && tree.nextIndex < LEAF_COUNT) {
       cell.classList.add('current');
+      state = 'next to use';
     }
+    cell.setAttribute('aria-label', `Key ${i}: ${state}`);
     cell.setAttribute('data-tooltip', `key ${i}: ${toHex(tree.otsKeys[i].pkHash.slice(0, 8))}\u2026`);
   }
 }

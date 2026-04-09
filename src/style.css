@@ -328,7 +328,8 @@ textarea, input[type="text"] {
   transition: border-color 0.15s;
 }
 
-textarea:focus, input[type="text"]:focus { outline: none; border-color: var(--accent); }
+textarea:focus, input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+textarea:focus:not(:focus-visible), input[type="text"]:focus:not(:focus-visible) { outline: none; }
 
 label {
   display: block;
@@ -541,3 +542,70 @@ label {
 
 #init-overlay { position: fixed; inset: 0; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; z-index: 1000; font-size: 0.9rem; color: var(--accent); letter-spacing: 0.04em; }
 #init-overlay.hidden { display: none; }
+
+/* --- Skip Navigation --- */
+.skip-link {
+  position: absolute;
+  top: -100%;
+  left: 0;
+  background: var(--accent);
+  color: var(--bg);
+  padding: 0.6rem 1rem;
+  font-size: 0.88rem;
+  font-weight: 700;
+  z-index: 2000;
+  text-decoration: none;
+}
+.skip-link:focus { top: 0; }
+
+/* --- Visible Focus Indicators (all interactive elements) --- */
+a:focus-visible, button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, .toggle input:focus-visible + .toggle-slider {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* --- Reduced Motion --- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* --- Touch Targets (WCAG 2.5.5 — 44px) --- */
+@media (pointer: coarse) {
+  .btn { min-height: 44px; min-width: 44px; padding: 0.6rem 1.1rem; }
+  .theme-toggle { width: 44px; height: 44px; }
+  .toggle { width: 3.2rem; height: 1.7rem; }
+  .site-nav a { min-height: 44px; display: inline-flex; align-items: center; }
+}
+
+/* --- Additional Mobile Breakpoints --- */
+@media (max-width: 480px) {
+  h1 { font-size: 1.3rem; }
+  h2 { font-size: 1.1rem; }
+  .site-title { font-size: 1.1rem; }
+  .site-subtitle { font-size: 0.7rem; }
+  .container { padding: 0 0.75rem; }
+  main { padding: 1rem 0 2rem; }
+  .section { margin-bottom: 2rem; }
+  .card { padding: 1rem; }
+  .hss-diagram { padding: 1rem; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .result-row { flex-direction: column; gap: 0.2rem; }
+  .result-key { min-width: 0; }
+}
+
+/* --- Screen Reader Only Utility --- */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0,0,0,0);
+  white-space: nowrap;
+  border: 0;
+}
