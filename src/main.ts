@@ -15,6 +15,7 @@ import {
   H,
   P,
   N,
+  W,
 } from './lms';
 import type { LmsTree, LmsSignature } from './lms';
 
@@ -34,6 +35,109 @@ let reuseDetected = false;
 let signingLocked = false;
 
 const LEAF_COUNT = 1 << H;
+const WOTS_STEPS = 1 << W; // 16 hash-chain steps (0..15); step 15 is the public key
+const CHAINS_SHOWN = 8;    // how many of the p=67 chains to visualize at once
+
+// HSS interactive demo state (Section D)
+const HSS_L1 = 8;
+const HSS_L2 = 8;
+const HSS_CAP = HSS_L1 * HSS_L2; // 64
+let hssTotalUsed = 21;           // illustrative starting state: L1 2/8, L2 5/8
+
+// ============================================================
+// W-OTS+ hash-chain visualizer (teaching device)
+// Each chain is 2^w = 16 nodes: step 0 = sk (secret), step 15 = pk (public).
+// A signature reveals the chain value at step a[i]; the verifier re-derives
+// everything from there up to pk. Reuse reveals a second, lower depth.
+// ============================================================
+
+interface ChainRowSpec {
+  i: number;       // chain position (0..p-1)
+  a1: number;      // first revealed depth
+  a2?: number;     // second revealed depth (reuse mode)
+  target?: number; // forged-target depth
+}
+
+function renderChainDiagram(rows: ChainRowSpec[], mode: 'sign' | 'reuse'): string {
+  const body = rows.map(({ i, a1, a2, target }) => {
+    const lo = a2 === undefined ? a1 : Math.min(a1, a2);
+    const nodes = Array.from({ length: WOTS_STEPS }, (_, step) => {
+      const cls = ['chain-node'];
+      if (step === 0) cls.push('sk');
+      if (step === WOTS_STEPS - 1) cls.push('pk');
+      if (mode === 'sign') {
+        if (step < a1) cls.push('secret');
+        else if (step > a1) cls.push('derivable');
+        if (step === a1) cls.push('revealed');
+      } else {
+        if (step >= lo) cls.push('forgeable');
+        if (step === a1) cls.push('reveal-a');
+        if (a2 !== undefined && step === a2) cls.push('reveal-b');
+        if (target !== undefined && step === target) {
+          cls.push('target', target >= lo ? 'reachable' : 'unreachable');
+        }
+      }
+      const note = step === 0 ? ' = sk (secret)' : step === WOTS_STEPS - 1 ? ' = pk (public)' : '';
+      return `<span class="${cls.join(' ')}" title="step ${step}${note}"></span>`;
+    }).join('');
+    const meta = mode === 'sign'
+      ? `a=${a1}`
+      : `a1=${a1}, a2=${a2}${target !== undefined ? `, t=${target}` : ''}`;
+    return `<div class="chain-row">
+      <span class="chain-row-label">pos ${i}</span>
+      <div class="chain-track" role="img" aria-label="Chain for position ${i}: ${meta}">${nodes}</div>
+      <span class="chain-row-meta">${meta}</span>
+    </div>`;
+  }).join('');
+  return `<div class="chain-diagram">${body}</div>`;
+}
+
+// Show the first CHAINS_SHOWN chains inline; tuck the rest behind a native
+// <details> disclosure so the default view stays legible on mobile.
+function renderChainsCollapsible(rows: ChainRowSpec[], mode: 'sign' | 'reuse'): string {
+  const head = rows.slice(0, CHAINS_SHOWN);
+  const rest = rows.slice(CHAINS_SHOWN);
+  let html = renderChainDiagram(head, mode);
+  if (rest.length) {
+    html += `<details class="chain-more">
+      <summary>Show all ${rows.length} chains <span class="chain-more-count">(+${rest.length})</span></summary>
+      ${renderChainDiagram(rest, mode)}
+    </details>`;
+  }
+  return html;
+}
+
+function chainLegend(mode: 'sign' | 'reuse'): string {
+  const items = mode === 'sign'
+    ? [
+        ['sk', 'sk · step 0 (secret)'],
+        ['revealed', 'revealed signature'],
+        ['secret', 'stays secret'],
+        ['derivable', 'verifier re-derives'],
+        ['pk', 'pk · step 15 (public)'],
+      ]
+    : [
+        ['reveal-a', 'depth from msg A'],
+        ['reveal-b', 'depth from msg B'],
+        ['forgeable', 'forgeable region (≥ min)'],
+        ['target reachable', 'target — forgeable'],
+        ['target unreachable', 'target — blocked'],
+      ];
+  return `<div class="chain-legend">${items
+    .map(([c, label]) => `<span><i class="chain-swatch ${c}"></i>${label}</span>`)
+    .join('')}</div>`;
+}
+
+// Order positions with the exploitable (differing) ones first; the collapsible
+// view shows the first CHAINS_SHOWN and tucks the rest behind a disclosure.
+function pickReusePositions(coefs1: number[], coefs2: number[]): number[] {
+  const differing: number[] = [];
+  const same: number[] = [];
+  for (let i = 0; i < coefs1.length; i++) {
+    (coefs1[i] !== coefs2[i] ? differing : same).push(i);
+  }
+  return [...differing, ...same];
+}
 
 // ============================================================
 // HTML template
@@ -44,17 +148,9 @@ function renderApp(): string {
     `<div class="key-cell" id="key-cell-${i}" data-index="${i}" role="img" aria-label="Key ${i}: available">${i}</div>`
   ).join('');
 
-  const hssL1 = Array.from({ length: 8 }, (_, i) =>
-    `<div class="hss-node ${i < 2 ? 'used' : i === 2 ? 'active' : ''}" title="L1 slot ${i}">${i < 2 ? '\u2713' : i === 2 ? '\u25b6' : i}</div>`
-  ).join('');
-
-  const hssL2 = Array.from({ length: 8 }, (_, i) =>
-    `<div class="hss-node ${i < 5 ? 'used' : i === 5 ? 'active' : ''}" title="L2 slot ${i}">${i < 5 ? '\u2713' : i === 5 ? '\u25b6' : i}</div>`
-  ).join('');
-
   return `
-<div id="init-overlay">
-  <span class="spinner"></span>
+<div id="init-overlay" role="status" aria-live="polite">
+  <span class="spinner" aria-hidden="true"></span>
   <span>Generating LMS tree (32 W-OTS+ keypairs)\u2026</span>
 </div>
 
@@ -63,8 +159,8 @@ function renderApp(): string {
 <header class="site-header">
   <div class="container">
     <div class="header-titles">
-      <div class="site-title">LMS <span>/</span> HSS Ledger</div>
-      <div class="site-subtitle">Leighton-Micali Signatures &middot; NIST SP 800-208 &middot; RFC 8554</div>
+      <h1 class="site-title">LMS <span>/</span> HSS Ledger</h1>
+      <p class="site-subtitle">Leighton-Micali Signatures &middot; NIST SP 800-208 &middot; RFC 8554</p>
     </div>
     <button class="theme-toggle" id="theme-toggle" aria-label="Switch to light theme">\ud83c\udf19</button>
   </div>
@@ -92,6 +188,11 @@ function renderApp(): string {
     <h3>A1 &mdash; Hash-based signatures from one-time keys</h3>
     <p>The conceptual foundation is the <strong>Lamport one-time signature</strong>. To sign a 1-bit message <em>b</em>: publish <code>H(sk_b)</code> as the public key. The signature is <code>sk_b</code> &mdash; the verifier checks <code>H(sk_b)</code> matches the published value. The key can only be used once: revealing <code>sk_0</code> to sign a <code>0</code> makes it impossible to later sign a <code>1</code> securely.</p>
     <p><strong>W-OTS+</strong> (Winternitz One-Time Signature, RFC 8554 &sect;3) generalizes this using hash chains. Per the RFC &sect;3.3 signing algorithm: <code>sig[i] = chain(sk[i], 0, a[i])</code> where <code>a[i]</code> is the <em>i</em>-th <em>w</em>-bit coefficient of the message hash. Verification completes the chain: <code>chain(sig[i], a[i], 2^w&minus;1&minus;a[i])</code> must recover <code>pk[i]</code>.</p>
+    <div class="chain-primer">
+      <p class="chain-primer-caption">A hash chain is a one-way street. Repeatedly hashing turns a secret <code>sk</code> into a public <code>pk</code> over 2<sup>w</sup>=16 steps. You can always walk <em>forward</em> (hash again), but never <em>backward</em>. Signing publishes one node partway along (here, step&nbsp;9); the verifier hashes it forward to <code>pk</code>, while everything below stays secret:</p>
+      ${renderChainDiagram([{ i: 0, a1: 9 }], 'sign')}
+      ${chainLegend('sign')}
+    </div>
     <p><strong>LMS</strong> organizes 2^h W-OTS+ keypairs into a Merkle tree. The root is the LMS public key. An LMS signature includes the OTS signature for the chosen leaf plus an auth path (h sibling hashes) to reconstruct the root. Each leaf is used exactly once.</p>
     <div class="info-box"><strong>Parameters in this demo:</strong> LMS-SHA256-M32-H5 + LMOTS-SHA256-N32-W4 per NIST SP 800-208 &mdash; 32 bytes (SHA-256), tree height h=5, Winternitz w=4, p=67 chain elements per OTS key. The tree supports <strong>32 one-time signatures</strong>.</div>
   </div>
@@ -132,6 +233,12 @@ function renderApp(): string {
     <span class="section-tag interactive">B &middot; Interactive</span>
     <h2>Live LMS Key State Visualizer</h2>
   </div>
+  <div class="guide-banner" role="note">
+    <strong>How to drive this demo:</strong>
+    <span class="guide-step"><span class="guide-num">1</span> Sign a message &mdash; watch a leaf flip to <em>used</em> and see how the signature is built</span>
+    <span class="guide-step"><span class="guide-num">2</span> Verify it against the root (the public key)</span>
+    <span class="guide-step"><span class="guide-num">3</span> In <a href="#section-c">Section&nbsp;C</a>, reuse one leaf and forge a signature</span>
+  </div>
   <div class="card">
     <h3>Key State &mdash; LMS-SHA256-M32-H5 (32-leaf tree)</h3>
     <div class="state-counter-display" id="state-counter">
@@ -160,6 +267,7 @@ function renderApp(): string {
       </div>
       <div id="sign-result" class="hidden mt-2" aria-live="polite">
         <hr class="divider">
+        <div id="sign-walkthrough" class="walkthrough"></div>
         <div class="result-panel" id="sign-result-content"></div>
       </div>
       <div id="exhausted-msg" class="hidden warn-box mt-2">
@@ -209,7 +317,7 @@ function renderApp(): string {
   <div class="card">
     <h3>C2 &mdash; Live reuse demonstration</h3>
     <div class="toggle-row">
-      <label class="toggle" for="reuse-toggle"><input type="checkbox" id="reuse-toggle" aria-describedby="reuse-toggle-label"><span class="toggle-slider" aria-hidden="true"></span></label>
+      <label class="toggle" for="reuse-toggle"><input type="checkbox" id="reuse-toggle" aria-label="Force key reuse (demonstration only)" aria-describedby="reuse-toggle-label"><span class="toggle-slider" aria-hidden="true"></span></label>
       <span class="toggle-label" id="reuse-toggle-label">Force Key Reuse (disabled)</span>
     </div>
     <div id="reuse-sign-area">
@@ -288,14 +396,22 @@ function renderApp(): string {
       <li><strong>Level 2 (bottom trees):</strong> each signs actual messages. Height h2 &rarr; 2^h2 signatures per tree.</li>
       <li><strong>Total capacity:</strong> 2^h1 &times; 2^h2 signatures</li>
     </ul>
+    <p style="font-size:0.86rem;" class="text-muted">Step through signing below. The Level&nbsp;2 tree fills one leaf per message; when it&rsquo;s full, Level&nbsp;1 signs a fresh Level&nbsp;2 tree&rsquo;s public key (a <em>roll-over</em>) and signing continues &mdash; the mechanism that lets HSS exceed one tree&rsquo;s 2<sup>h</sup> limit.</p>
     <div class="hss-diagram">
-      <div class="hss-level-label">Level 1 Tree (h1=3, 8 slots)</div>
-      <div class="hss-row">${hssL1}</div>
+      <div class="hss-level-label">Level 1 Tree (h1=3, 8 slots) &mdash; signs Level 2 public keys</div>
+      <div class="hss-row" id="hss-l1-row"></div>
       <div class="hss-connector"></div>
-      <div class="hss-level-label">Current Level 2 Tree (h2=3, 8 slots)</div>
-      <div class="hss-row">${hssL2}</div>
-      <div class="hss-state-display">Level 1 index: 2/8 | Level 2 index: 5/8 | Total used: 21/64 signatures</div>
+      <div class="hss-level-label">Current Level 2 Tree (h2=3, 8 slots) &mdash; signs messages</div>
+      <div class="hss-row" id="hss-l2-row"></div>
+      <div class="hss-state-display" id="hss-state-line"></div>
     </div>
+    <div class="flex-row" style="margin-top:0.85rem;">
+      <button class="btn btn-primary" id="hss-sign-1">Sign 1 message</button>
+      <button class="btn btn-secondary" id="hss-sign-8">Fill current L2 (+8)</button>
+      <button class="btn btn-secondary" id="hss-reset">Reset</button>
+    </div>
+    <div id="hss-rollover" class="info-box hidden mt-2" role="status">↻ <strong>Roll-over:</strong> the Level&nbsp;2 tree filled up, so Level&nbsp;1 signed a brand-new Level&nbsp;2 tree&rsquo;s public key. Signing continues seamlessly on the fresh tree.</div>
+    <div id="hss-full" class="warn-box hidden mt-2" role="status">🔒 <strong>HSS instance exhausted</strong> &mdash; all ${HSS_CAP} signatures used (2<sup>h1</sup> × 2<sup>h2</sup>). A real deployment sizes h1/h2 for the device lifetime; h1=h2=10 gives over a million.</div>
   </div>
   <div class="card">
     <h3>D3 &mdash; HSS signing process</h3>
@@ -419,9 +535,31 @@ function updateStateCounter() {
   el('counter-remaining').textContent = `${remaining} signature${remaining !== 1 ? 's' : ''} remaining`;
 }
 
-function showSignResult(sig: LmsSignature, message: Uint8Array) {
+function renderSignWalkthrough(coefs: number[]): string {
+  const chips = coefs.slice(0, 16).map((a, i) =>
+    `<span class="coef-chip" title="digit ${i} = ${a} (step on chain ${i})">${a.toString(16)}</span>`
+  ).join('');
+  const rows = coefs.map((a, i) => ({ i, a1: a }));
+  return `
+    <h4 class="walk-title">How this signature was built</h4>
+    <ol class="walk-steps">
+      <li><strong>Hash the message.</strong> The text runs through SHA-256 (with a per-leaf domain separator) to a 32-byte digest unique to this message and leaf.</li>
+      <li><strong>Split into ${P} digits.</strong> The digest plus a Winternitz checksum becomes ${P} base-16 digits <code>a[0…${P - 1}]</code>, each 0&ndash;15. First 16 (hex):
+        <div class="coef-strip">${chips}<span class="coef-more">+${P - 16} more</span></div>
+      </li>
+      <li><strong>Reveal one node per chain.</strong> For each digit <code>a[i]</code> the signer publishes that chain&rsquo;s value at step <code>a[i]</code> &mdash; the green node. Everything below it stays secret; the verifier re-hashes forward to <code>pk</code>. First ${CHAINS_SHOWN} of ${P} chains (expand for all):
+        ${renderChainsCollapsible(rows, 'sign')}
+        ${chainLegend('sign')}
+      </li>
+      <li><strong>Attach the Merkle proof.</strong> ${H} sibling hashes (the auth path) let anyone climb from this leaf to the root &mdash; the single public key for all ${LEAF_COUNT} leaves.</li>
+    </ol>
+    <hr class="divider">`;
+}
+
+function showSignResult(sig: LmsSignature, message: Uint8Array, coefs: number[]) {
   const msgText = new TextDecoder().decode(message);
   const allSigBytes = sig.otsSignature.reduce((a, b) => a + b.length, 0) + sig.authPath.reduce((a, b) => a + b.length, 0);
+  el('sign-walkthrough').innerHTML = renderSignWalkthrough(coefs);
   const content = el('sign-result-content');
   content.innerHTML = `
     <div class="result-row"><span class="result-key">Status</span><span class="result-value"><span class="badge badge-valid">&#10003; SIGNATURE PRODUCED</span></span></div>
@@ -514,7 +652,7 @@ function bindSigningEvents() {
     }
     const btn = el<HTMLButtonElement>('btn-sign');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> Signing\u2026';
+    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span> Signing\u2026';
     try {
       const msgText = el<HTMLTextAreaElement>('sign-message').value;
       const msgBytes = new TextEncoder().encode(msgText);
@@ -522,9 +660,10 @@ function bindSigningEvents() {
       tree = updatedTree;
       lastSignature = signature;
       lastMessage = msgBytes;
+      const coefs = await getMsgCoefficients(msgBytes, tree.id, signature.leafIndex);
       updateKeyGrid();
       updateStateCounter();
-      showSignResult(signature, msgBytes);
+      showSignResult(signature, msgBytes, coefs);
       if (tree.nextIndex >= LEAF_COUNT) {
         el('exhausted-msg').classList.remove('hidden');
       }
@@ -540,15 +679,16 @@ function bindSigningEvents() {
   el<HTMLButtonElement>('btn-verify').addEventListener('click', async () => {
     if (!tree || !lastSignature || !lastMessage) return;
     const btn = el<HTMLButtonElement>('btn-verify');
-    btn.innerHTML = '<span class="spinner"></span> Verifying\u2026';
+    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span> Verifying\u2026';
     btn.disabled = true;
     try {
       const msgText = el<HTMLTextAreaElement>('verify-message').value;
       const msgBytes = new TextEncoder().encode(msgText);
       const valid = await lmsVerify(msgBytes, lastSignature, tree.id, tree.root);
-      el('verify-result-content').innerHTML = valid
+      el('verify-result-content').innerHTML = (valid
         ? '<span class="badge badge-valid">&#10003; VALID &mdash; signature verified against public key (root)</span>'
-        : '<span class="badge badge-invalid">&#10007; INVALID &mdash; message or signature does not match</span>';
+        : '<span class="badge badge-invalid">&#10007; INVALID &mdash; message or signature does not match</span>')
+        + `<p class="text-muted mt-1" style="font-size:0.78rem;">Verification re-hashes each chain from your signature up to <code>pk</code>, folds the ${P} <code>pk</code> values into the leaf hash, then climbs the ${H} auth-path siblings to a root &mdash; and checks it equals the public key. No secret is ever needed.</p>`;
       el('verify-result').classList.remove('hidden');
     } finally {
       btn.disabled = false;
@@ -590,7 +730,7 @@ function bindReuseEvents() {
     const msgBytes = new TextEncoder().encode(msgText);
     const btn = el<HTMLButtonElement>('btn-sign-a');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span>';
+    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span><span class="sr-only">Signing Message A…</span>';
     try {
       const { signature, updatedTree } = await lmsSign(tree, msgBytes);
       tree = updatedTree;
@@ -618,7 +758,7 @@ function bindReuseEvents() {
     const msgBytes = new TextEncoder().encode(msgText);
     const btn = el<HTMLButtonElement>('btn-sign-b');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span>';
+    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span><span class="sr-only">Signing Message B…</span>';
     try {
       const { signature } = await lmsSignForceReuse(tree, msgBytes, reuseLeafIndex);
       reuseSig2 = signature;
@@ -642,7 +782,7 @@ function bindReuseEvents() {
     if (!tree || !reuseSig1 || !reuseSig2 || !reuseMsg1Coefs || !reuseMsg2Coefs) return;
     const btn = el<HTMLButtonElement>('btn-forge');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> Computing forgery\u2026';
+    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span> Computing forgery\u2026';
     try {
       const targetText = el<HTMLTextAreaElement>('forgery-target-msg').value;
       const targetBytes = new TextEncoder().encode(targetText);
@@ -651,6 +791,9 @@ function bindReuseEvents() {
       );
       const valid = await lmsVerify(targetBytes, forgedSignature, tree.id, tree.root);
       const unreachable = attackDetails.filter(d => d.method.includes('unreachable')).length;
+      const forgeRows = [...attackDetails]
+        .sort((a, b) => Number(a.a1 === a.a2) - Number(b.a1 === b.a2))
+        .map(d => ({ i: d.i, a1: d.a1, a2: d.a2, target: d.aTarget }));
       const resultDiv = el('forgery-result-content');
       resultDiv.innerHTML = `
         <div class="danger-box" style="margin-bottom:0.75rem;">
@@ -660,6 +803,9 @@ function bindReuseEvents() {
             : `<span class="badge badge-invalid" style="margin-left:0.5rem;">&#10007; Forgery incomplete (${unreachable} position${unreachable !== 1 ? 's' : ''} unreachable)</span>`
           }
         </div>
+        <p class="text-muted" style="font-size:0.8rem;margin-bottom:0.5rem;">For the target message, each chain needs a node at step <code>t</code>. If <code>t ≥ min(a1, a2)</code> the attacker hashes forward to it (forgeable); if <code>t</code> falls below both known depths it&rsquo;s blocked. The <code>t</code> marker is outlined green when reachable, red when blocked:</p>
+        ${renderChainsCollapsible(forgeRows, 'reuse')}
+        ${chainLegend('reuse')}
         <div class="result-panel">
           <div class="result-row"><span class="result-key">Target msg</span><span class="result-value">${escapeHtml(targetText.slice(0,60))}${targetText.length > 60 ? '\u2026' : ''}</span></div>
           <div class="result-row"><span class="result-key">Leaf reused</span><span class="result-value danger">${reuseLeafIndex}</span></div>
@@ -712,11 +858,93 @@ function showSigComparison(sig1: LmsSignature, sig2: LmsSignature, coefs1: numbe
       ${P > maxShow ? `<div class="text-muted" style="font-size:0.72rem;">\u2026 +${P - maxShow} more</div>` : ''}
     </div>
   `;
+  const chainRows = pickReusePositions(coefs1, coefs2).map((i) => ({ i, a1: coefs1[i], a2: coefs2[i] }));
   el('reuse-explanation').innerHTML = `
     <span class="text-danger">\u26a0 ${diffs} of ${P} positions differ between the two signatures.</span>
-    At each differing position the attacker has two chain values at different depths and can extend the earlier one forward.
-    Red rows show positions where a1[i] \u2260 a2[i].
+    At each position the attacker now knows the chain value at <em>two</em> depths &mdash; and can hash <em>forward</em> from the shallower one. So every step from <code>min(a1[i], a2[i])</code> onward is reachable. The shaded band below is that newly forgeable region (differing positions first):
+    ${renderChainsCollapsible(chainRows, 'reuse')}
+    ${chainLegend('reuse')}
+    <span class="text-muted" style="display:block;margin-top:0.5rem;">Why one signature is <em>not</em> enough: to forge you must raise message digits, but the Winternitz checksum forces at least one checksum digit <em>down</em> &mdash; below the single depth you know &mdash; so it stays out of reach. A second reuse lowers your reachable floor at every position, and that protection collapses.</span>
   `;
+}
+
+// ============================================================
+// Section D — interactive HSS roll-over
+// ============================================================
+
+function renderHssGrids() {
+  const l1Active = Math.floor(hssTotalUsed / HSS_L2);
+  const l2Index = hssTotalUsed % HSS_L2;
+  const full = hssTotalUsed >= HSS_CAP;
+  el('hss-l1-row').innerHTML = Array.from({ length: HSS_L1 }, (_, i) => {
+    const used = i < l1Active;
+    const active = i === l1Active && !full;
+    return `<div class="hss-node ${used ? 'used' : active ? 'active' : ''}" title="L1 slot ${i}">${used ? '✓' : active ? '▶' : i}</div>`;
+  }).join('');
+  el('hss-l2-row').innerHTML = Array.from({ length: HSS_L2 }, (_, i) => {
+    const used = i < l2Index;
+    const active = i === l2Index && !full;
+    return `<div class="hss-node ${used ? 'used' : active ? 'active' : ''}" title="L2 slot ${i}">${used ? '✓' : active ? '▶' : i}</div>`;
+  }).join('');
+  el('hss-state-line').textContent =
+    `Level 1 index: ${Math.min(l1Active, HSS_L1)}/${HSS_L1} | Level 2 index: ${full ? HSS_L2 : l2Index}/${HSS_L2} | Total used: ${hssTotalUsed}/${HSS_CAP} signatures`;
+}
+
+function stepHss(n: number) {
+  const before = Math.floor(hssTotalUsed / HSS_L2);
+  hssTotalUsed = Math.min(HSS_CAP, hssTotalUsed + n);
+  const after = Math.floor(hssTotalUsed / HSS_L2);
+  renderHssGrids();
+  el('hss-rollover').classList.toggle('hidden', !(after > before) || hssTotalUsed >= HSS_CAP);
+  el('hss-full').classList.toggle('hidden', hssTotalUsed < HSS_CAP);
+}
+
+function bindHssEvents() {
+  el<HTMLButtonElement>('hss-sign-1').addEventListener('click', () => stepHss(1));
+  el<HTMLButtonElement>('hss-sign-8').addEventListener('click', () => stepHss(HSS_L2));
+  el<HTMLButtonElement>('hss-reset').addEventListener('click', () => {
+    hssTotalUsed = 0;
+    renderHssGrids();
+    el('hss-rollover').classList.add('hidden');
+    el('hss-full').classList.add('hidden');
+  });
+  renderHssGrids();
+}
+
+// ============================================================
+// Scroll spy — highlight the active section in the nav
+// ============================================================
+
+function initScrollSpy() {
+  const navLinks = Array.from(
+    document.querySelectorAll<HTMLAnchorElement>('.site-nav a')
+  );
+  const linkFor = new Map<string, HTMLAnchorElement>();
+  for (const link of navLinks) {
+    const id = link.getAttribute('href')?.slice(1);
+    if (id) linkFor.set(id, link);
+  }
+  const sections = Array.from(document.querySelectorAll<HTMLElement>('main .section'));
+  if (!sections.length || !('IntersectionObserver' in window)) return;
+
+  let activeId = '';
+  const setActive = (id: string) => {
+    if (id === activeId) return;
+    activeId = id;
+    for (const link of navLinks) link.removeAttribute('aria-current');
+    linkFor.get(id)?.setAttribute('aria-current', 'true');
+  };
+
+  const observer = new IntersectionObserver(
+    (entries) => {
+      const visible = entries
+        .filter((e) => e.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+      if (visible[0]) setActive(visible[0].target.id);
+    },
+    { rootMargin: '-45% 0px -45% 0px', threshold: [0, 0.25, 0.5, 1] }
+  );
+  for (const section of sections) observer.observe(section);
 }
 
 // ============================================================
@@ -728,6 +956,8 @@ async function main() {
   initThemeToggle();
   bindSigningEvents();
   bindReuseEvents();
+  bindHssEvents();
+  initScrollSpy();
   await initTree();
 }
 

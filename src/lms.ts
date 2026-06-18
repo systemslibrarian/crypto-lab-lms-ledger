@@ -128,9 +128,8 @@ export async function chain(
   chainIndex: number
 ): Promise<Uint8Array> {
   let tmp = x;
-  const ffByte = new Uint8Array([0xff]);
-  for (let j = i + 1; j <= i + s; j++) {
-    tmp = await sha256(concat(id, u32be(q), u16be(chainIndex), u16be(j), ffByte, tmp));
+  for (let j = i; j < i + s; j++) {
+    tmp = await sha256(concat(id, u32be(q), u16be(chainIndex), new Uint8Array([j]), tmp));
   }
   return tmp;
 }
