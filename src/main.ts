@@ -487,6 +487,14 @@ function renderApp(): string {
       <a href="https://media.defense.gov/2022/Sep/07/2003071836/-1/-1/0/CSA_CNSA_2.0_ALGORITHMS_10-MAY-2023.PDF" target="_blank" rel="noopener">CNSA 2.0</a>
       <a href="https://systemslibrarian.github.io/crypto-lab/" target="_blank" rel="noopener">crypto-lab portfolio</a>
     </div>
+    <div class="footer-links">
+      Related demos:
+      <a href="https://systemslibrarian.github.io/crypto-lab-lms-xmss/" target="_blank" rel="noopener">crypto-lab-lms-xmss</a>
+      <a href="https://systemslibrarian.github.io/crypto-lab-sphincs-ledger/" target="_blank" rel="noopener">crypto-lab-sphincs-ledger</a>
+      <a href="https://systemslibrarian.github.io/crypto-lab-merkle-vault/" target="_blank" rel="noopener">crypto-lab-merkle-vault</a>
+      <a href="https://systemslibrarian.github.io/crypto-lab-dilithium-seal/" target="_blank" rel="noopener">crypto-lab-dilithium-seal</a>
+      <a href="https://systemslibrarian.github.io/crypto-lab-falcon-seal/" target="_blank" rel="noopener">crypto-lab-falcon-seal</a>
+    </div>
     <p>"So whether you eat or drink or whatever you do, do it all for the glory of God." &mdash; 1 Corinthians 10:31</p>
   </div>
 </footer>
