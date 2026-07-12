@@ -145,38 +145,17 @@ pre code {
   padding: 0 1.25rem;
 }
 
-.site-header {
-  position: relative;
-  background: var(--surface);
-  border-bottom: 2px solid var(--border);
-  padding: 1.25rem 0;
-  box-shadow: var(--shadow);
-}
-
-.site-header .container {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}
-
-.header-titles { flex: 1; }
-
-.site-title {
-  font-size: 1.35rem;
-  color: var(--accent);
-  letter-spacing: 0.04em;
-}
-
-.site-title span { color: var(--text-muted); }
-
-.site-subtitle {
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  margin-top: 0.2rem;
-  margin-bottom: 0;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
+/* BEGIN cl-hero standard — managed, keep in sync across fleet */
+.cl-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:clamp(1rem,4vw,3rem);flex-wrap:wrap;margin:clamp(1rem,3vw,2rem) 0 1.5rem;}
+.cl-hero-main{flex:1 1 22rem;min-width:min(100%,20rem);}
+.cl-hero-title{margin:0;font-size:clamp(1.6rem,3.8vw,2.7rem);font-weight:700;line-height:1.1;letter-spacing:.01em;color:var(--accent);}
+.cl-hero-sub{margin:.4rem 0 0;font-size:clamp(.9rem,1.6vw,1.05rem);letter-spacing:.01em;opacity:.85;color:var(--text-muted);}
+.cl-hero-desc{margin:.55rem 0 0;font-size:1rem;line-height:1.5;color:var(--text-muted);max-width:60ch;}
+.cl-hero-why{flex:0 1 min(40%,26rem);min-width:min(100%,15rem);border:1px solid var(--border);border-radius:10px;padding:.85rem 1.05rem;background:color-mix(in oklab,var(--accent) 6%,transparent);}
+.cl-hero-why-label{display:block;font-size:.68rem;font-weight:700;letter-spacing:.14em;color:var(--accent);}
+.cl-hero-why-text{margin:.35rem 0 0;font-size:.95rem;line-height:1.5;color:var(--text);}
+@media (max-width:640px){.cl-hero{flex-direction:column;}.cl-hero-why{flex-basis:auto;width:100%;}}
+/* END cl-hero standard */
 
 .theme-toggle {
   width: 2.6rem;
@@ -749,8 +728,6 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible, input:focu
 @media (max-width: 480px) {
   h1 { font-size: 1.3rem; }
   h2 { font-size: 1.1rem; }
-  .site-title { font-size: 1.1rem; }
-  .site-subtitle { font-size: 0.7rem; }
   .container { padding: 0 0.75rem; }
   main { padding: 1rem 0 2rem; }
   .section { margin-bottom: 2rem; }

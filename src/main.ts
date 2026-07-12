@@ -156,16 +156,6 @@ function renderApp(): string {
 
 <a class="skip-link" href="#section-a">Skip to content</a>
 
-<header class="site-header">
-  <div class="container">
-    <div class="header-titles">
-      <h1 class="site-title">LMS <span>/</span> HSS Ledger</h1>
-      <p class="site-subtitle">Leighton-Micali Signatures &middot; NIST SP 800-208 &middot; RFC 8554</p>
-    </div>
-    <button class="theme-toggle" id="theme-toggle" aria-label="Switch to light theme">\ud83c\udf19</button>
-  </div>
-</header>
-
 <nav class="site-nav" aria-label="Section navigation">
   <div class="container">
     <a href="#section-a">A &middot; What is LMS?</a>
@@ -178,6 +168,19 @@ function renderApp(): string {
 
 <main>
 <div class="container">
+
+<header class="cl-hero">
+  <div class="cl-hero-main">
+    <h1 class="cl-hero-title">LMS Ledger</h1>
+    <p class="cl-hero-sub">LMS/HSS &middot; NIST SP 800-208 &middot; RFC 8554</p>
+    <p class="cl-hero-desc">Build an LMS Merkle tree of one-time W-OTS+ keys and sign message by message, watching the nextIndex state advance so each leaf is spent exactly once.</p>
+  </div>
+  <aside class="cl-hero-why" aria-label="Why it matters">
+    <span class="cl-hero-why-label">WHY IT MATTERS</span>
+    <p class="cl-hero-why-text">Stateful hash-based signatures resist quantum attacks, but their security hinges on never reusing a leaf. Lose the state and reuse one key, and an attacker recovers hidden hash-chain values to forge signatures on messages you never signed.</p>
+  </aside>
+  <button class="theme-toggle" id="theme-toggle" aria-label="Switch to light theme">🌙</button>
+</header>
 
 <section class="section" id="section-a">
   <div class="section-header">
