@@ -9,28 +9,29 @@ import {
   lmsSign,
   lmsSignForceReuse,
   lmsVerify,
-  demonstrateForgery,
+  forgeFromReuse,
   getMsgCoefficients,
+  generateHss,
+  hssSign,
+  hssVerify,
   toHex,
   H,
   P,
   N,
   W,
 } from './lms';
-import type { LmsTree, LmsSignature } from './lms';
+import type { LmsTree, LmsSignature, HssPrivateKey, HssPublicKey } from './lms';
 
 // App state
 let tree: LmsTree | null = null;
 let lastSignature: LmsSignature | null = null;
 let lastMessage: Uint8Array | null = null;
 
-// Reuse attack state
+// Reuse attack state — the attacker collects several signatures on ONE leaf.
+interface Capture { message: Uint8Array; signature: LmsSignature; coefs: number[] }
 let reuseEnabled = false;
 let reuseLeafIndex = 0;
-let reuseSig1: LmsSignature | null = null;
-let reuseMsg1Coefs: number[] | null = null;
-let reuseSig2: LmsSignature | null = null;
-let reuseMsg2Coefs: number[] | null = null;
+let reuseCaptures: Capture[] = [];
 let reuseDetected = false;
 let signingLocked = false;
 
@@ -38,11 +39,20 @@ const LEAF_COUNT = 1 << H;
 const WOTS_STEPS = 1 << W; // 16 hash-chain steps (0..15); step 15 is the public key
 const CHAINS_SHOWN = 8;    // how many of the p=67 chains to visualize at once
 
-// HSS interactive demo state (Section D)
-const HSS_L1 = 8;
-const HSS_L2 = 8;
+// HSS interactive demo state (Section D) — a REAL two-level HSS instance.
+// Root tree h1=3 (8 leaf-tree slots), leaf trees h2=3 (8 signatures each) ->
+// 8 x 8 = 64 total signatures. Every "Sign" here performs genuine LMS signing
+// on the active leaf tree; a full leaf tree triggers a real root-tree roll-over.
+const HSS_ROOT_H = 3;
+const HSS_LEAF_H = 3;
+const HSS_L1 = 1 << HSS_ROOT_H; // 8
+const HSS_L2 = 1 << HSS_LEAF_H; // 8
 const HSS_CAP = HSS_L1 * HSS_L2; // 64
-let hssTotalUsed = 21;           // illustrative starting state: L1 2/8, L2 5/8
+let hssPriv: HssPrivateKey | null = null;
+let hssPub: HssPublicKey | null = null;
+let hssTotalUsed = 0;
+let hssLastVerified = false;
+let hssBusy = false;
 
 // ============================================================
 // W-OTS+ hash-chain visualizer (teaching device)
@@ -128,16 +138,6 @@ function chainLegend(mode: 'sign' | 'reuse'): string {
     .join('')}</div>`;
 }
 
-// Order positions with the exploitable (differing) ones first; the collapsible
-// view shows the first CHAINS_SHOWN and tucks the rest behind a disclosure.
-function pickReusePositions(coefs1: number[], coefs2: number[]): number[] {
-  const differing: number[] = [];
-  const same: number[] = [];
-  for (let i = 0; i < coefs1.length; i++) {
-    (coefs1[i] !== coefs2[i] ? differing : same).push(i);
-  }
-  return [...differing, ...same];
-}
 
 // ============================================================
 // HTML template
@@ -305,14 +305,9 @@ function renderApp(): string {
   </div>
   <div class="card">
     <h3>C1 &mdash; What happens when you reuse a leaf</h3>
-    <p>W-OTS+ security depends on the signer never revealing more than one signature per leaf. Per RFC 8554 &sect;3.3: <code>sig[i] = chain(sk[i], 0, a[i])</code> &mdash; the signature element at position <em>i</em> is the chain value at step <code>a[i]</code>.</p>
-    <p>If leaf <code>q</code> is used twice with different messages:</p>
-    <ul style="margin:0.5rem 0 0.85rem 1.5rem;line-height:2;font-size:0.88rem;">
-      <li><strong>Sig1[i]</strong> = <code>chain(sk[i], 0, a1[i])</code> &mdash; exposes chain value at step a1[i]</li>
-      <li><strong>Sig2[i]</strong> = <code>chain(sk[i], 0, a2[i])</code> &mdash; exposes chain value at step a2[i]</li>
-    </ul>
-    <p>An attacker observing both signatures can extend either value <em>forward</em> along the hash chain. For any target message with coefficient <code>at[i]</code>: if <code>at[i] &ge; min(a1[i], a2[i])</code>, the attacker constructs the required forged element. Since a random message will have coefficients distributed in <code>[0, 2^w&minus;1]</code>, with high probability most positions are reachable &mdash; producing a valid forgery under the same public key.</p>
-    <div class="danger-box"><strong>&#128308; One reuse enables arbitrary forgery.</strong> The entire key tree is compromised &mdash; not just the reused leaf. An attacker can forge signatures for any message they choose.</div>
+    <p>W-OTS+ security depends on the signer never revealing more than one signature per leaf. Per RFC 8554 &sect;4.5: <code>sig[i] = chain(x[i], 0, a[i])</code> &mdash; the signature element at position <em>i</em> is the chain value at step <code>a[i]</code>, where <code>a</code> depends on the message and a per-signature randomizer <code>C</code>.</p>
+    <p>Each reuse of leaf <code>q</code> leaks another set of chain values. Because a chain value can be advanced <em>forward</em> but never reversed, after <em>k</em> reuses the attacker holds each position at its <strong>lowest</strong> revealed depth <code>floor[i] = min</code> over the <em>k</em> signatures. To forge a chosen message the attacker grinds the randomizer <code>C</code> until every target digit <code>at[i] &ge; floor[i]</code>, then advances each held value forward to <code>at[i]</code>.</p>
+    <div class="danger-box"><strong>&#128308; Reuse compromises the whole tree.</strong> With this teaching parameter set (w=4, 67 chains) two reuses rarely suffice, but the floors drop fast: around <strong>eight</strong> reuses make forging an arbitrary message reliable, and every extra reuse makes it easier. A real deployment reuses a leaf zero times &mdash; one rollback or clone is already a standing invitation.</div>
   </div>
   <div class="card">
     <h3>C2 &mdash; Live reuse demonstration</h3>
@@ -322,19 +317,16 @@ function renderApp(): string {
     </div>
     <div id="reuse-sign-area">
       <div class="form-group">
-        <label for="reuse-msg-a">Message A</label>
+        <label for="reuse-msg-a">First message (consumes leaf q legitimately)</label>
         <textarea id="reuse-msg-a" rows="2">Firmware v3.0.0 &mdash; authorized release</textarea>
       </div>
-      <div class="form-group">
-        <label for="reuse-msg-b">Message B (will reuse same leaf when toggle enabled)</label>
-        <textarea id="reuse-msg-b" rows="2">Firmware v3.0.0-malware &mdash; backdoor build</textarea>
-      </div>
       <div class="flex-row">
-        <button class="btn btn-primary" id="btn-sign-a">Sign A</button>
-        <button class="btn btn-primary" id="btn-sign-b" disabled>Sign B (same leaf)</button>
+        <button class="btn btn-primary" id="btn-sign-a">Sign (consume leaf q)</button>
+        <button class="btn btn-primary" id="btn-sign-b" disabled>&#8635; Reuse leaf q (+1 leaked signature)</button>
       </div>
+      <p class="text-muted" style="font-size:0.8rem;margin-top:0.5rem;" id="reuse-count-note">Enable "Force Key Reuse", then reuse the leaf several times &mdash; each click leaks another signature and lowers the attacker's floor.</p>
     </div>
-    <div id="reuse-warning" class="warning-banner hidden" role="alert">&#9888; REUSE DETECTED &mdash; Two signatures from the same one-time key. The key is now compromised.</div>
+    <div id="reuse-warning" class="warning-banner hidden" role="alert">&#9888; REUSE DETECTED &mdash; Multiple signatures from the same one-time key. The key is now compromised.</div>
     <div id="locked-msg" class="locked-msg hidden" role="alert">&#128308; KEY COMPROMISED &mdash; Generate a new tree (Reset Tree in Section B) to continue normal signing.</div>
     <div id="reuse-results" class="hidden">
       <hr class="divider">
@@ -344,7 +336,7 @@ function renderApp(): string {
   </div>
   <div class="card" id="forgery-card">
     <h3>C3 &mdash; Forgery demonstration</h3>
-    <p style="font-size:0.86rem;" class="text-muted" id="forgery-prereq-msg">Complete the reuse demonstration above (sign Message A and B with the same leaf) to unlock the forgery demo.</p>
+    <p style="font-size:0.86rem;" class="text-muted" id="forgery-prereq-msg">Reuse the leaf at least twice above (the more the better) to unlock the forgery demo.</p>
     <div id="forgery-area" class="hidden">
       <div class="form-group">
         <label for="forgery-target-msg">Target message (not previously signed)</label>
@@ -532,7 +524,7 @@ function updateKeyGrid() {
       state = 'next to use';
     }
     cell.setAttribute('aria-label', `Key ${i}: ${state}`);
-    cell.setAttribute('data-tooltip', `key ${i}: ${toHex(tree.otsKeys[i].pkHash.slice(0, 8))}\u2026`);
+    cell.setAttribute('data-tooltip', `key ${i}: ${toHex(tree.otsKeys[i].K.slice(0, 8))}\u2026`);
   }
 }
 
@@ -627,10 +619,7 @@ async function initTree() {
   lastMessage = null;
   reuseDetected = false;
   signingLocked = false;
-  reuseSig1 = null;
-  reuseSig2 = null;
-  reuseMsg1Coefs = null;
-  reuseMsg2Coefs = null;
+  reuseCaptures = [];
   reuseEnabled = false;
   const reuseToggle = el<HTMLInputElement>('reuse-toggle');
   if (reuseToggle) reuseToggle.checked = false;
@@ -668,7 +657,7 @@ function bindSigningEvents() {
       tree = updatedTree;
       lastSignature = signature;
       lastMessage = msgBytes;
-      const coefs = await getMsgCoefficients(msgBytes, tree.id, signature.leafIndex);
+      const coefs = await getMsgCoefficients(msgBytes, tree.id, signature.leafIndex, signature.C);
       updateKeyGrid();
       updateStateCounter();
       showSignResult(signature, msgBytes, coefs);
@@ -725,9 +714,9 @@ function bindReuseEvents() {
   toggle.addEventListener('change', () => {
     reuseEnabled = toggle.checked;
     el('reuse-toggle-label').textContent = reuseEnabled
-      ? '\u26a0 Force Key Reuse (ENABLED \u2014 for demo only)'
+      ? '⚠ Force Key Reuse (ENABLED — for demo only)'
       : 'Force Key Reuse (disabled)';
-    el<HTMLButtonElement>('btn-sign-b').disabled = !reuseEnabled || !reuseSig1;
+    el<HTMLButtonElement>('btn-sign-b').disabled = !reuseEnabled || reuseCaptures.length === 0;
   });
 
   el<HTMLButtonElement>('btn-sign-a').addEventListener('click', async () => {
@@ -738,39 +727,34 @@ function bindReuseEvents() {
     const msgBytes = new TextEncoder().encode(msgText);
     const btn = el<HTMLButtonElement>('btn-sign-a');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span><span class="sr-only">Signing Message A…</span>';
+    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span><span class="sr-only">Signing…</span>';
     try {
       const { signature, updatedTree } = await lmsSign(tree, msgBytes);
       tree = updatedTree;
-      reuseSig1 = signature;
-      reuseMsg1Coefs = await getMsgCoefficients(msgBytes, tree.id, reuseLeafIndex);
+      const coefs = await getMsgCoefficients(msgBytes, tree.id, reuseLeafIndex, signature.C);
+      reuseCaptures = [{ message: msgBytes, signature, coefs }];
       updateKeyGrid();
       updateStateCounter();
       el<HTMLButtonElement>('btn-sign-b').disabled = !reuseEnabled;
-      // Show result
       el('reuse-results').classList.remove('hidden');
-      el('sig-compare-display').innerHTML = `<div class="sig-compare-col"><h4>Message A signed</h4><div class="result-panel" style="font-size:0.78rem;">
-        <div class="result-row"><span class="result-key">Leaf</span><span class="result-value accent">${signature.leafIndex}</span></div>
-        <div class="result-row"><span class="result-key">Msg</span><span class="result-value">${escapeHtml(msgText.slice(0,60))}</span></div>
-        <div class="result-row"><span class="result-key">Status</span><span class="result-value"><span class="badge badge-valid">&#10003; VALID</span></span></div>
-      </div></div><div class="sig-compare-col"><h4>Message B</h4><p class="text-muted" style="font-size:0.82rem;">Enable "Force Key Reuse" and click Sign B to see the attack.</p></div>`;
+      renderReuseCaptures();
     } finally {
       btn.disabled = false;
-      btn.innerHTML = 'Sign A';
+      btn.innerHTML = 'Sign (consume leaf q)';
     }
   });
 
   el<HTMLButtonElement>('btn-sign-b').addEventListener('click', async () => {
-    if (!tree || !reuseSig1 || !reuseEnabled) return;
-    const msgText = el<HTMLTextAreaElement>('reuse-msg-b').value;
-    const msgBytes = new TextEncoder().encode(msgText);
+    if (!tree || reuseCaptures.length === 0 || !reuseEnabled) return;
     const btn = el<HTMLButtonElement>('btn-sign-b');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span><span class="sr-only">Signing Message B…</span>';
+    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span><span class="sr-only">Reusing leaf…</span>';
     try {
+      const k = reuseCaptures.length;
+      const msgBytes = new TextEncoder().encode(`Reused signature #${k} — v3.0.${k} malicious build`);
       const { signature } = await lmsSignForceReuse(tree, msgBytes, reuseLeafIndex);
-      reuseSig2 = signature;
-      reuseMsg2Coefs = await getMsgCoefficients(msgBytes, tree.id, reuseLeafIndex);
+      const coefs = await getMsgCoefficients(msgBytes, tree.id, reuseLeafIndex, signature.C);
+      reuseCaptures.push({ message: msgBytes, signature, coefs });
       reuseDetected = true;
       signingLocked = true;
       updateKeyGrid();
@@ -778,56 +762,64 @@ function bindReuseEvents() {
       el('locked-msg').classList.remove('hidden');
       el<HTMLButtonElement>('btn-sign').disabled = true;
       el('signing-panel').classList.add('signing-locked');
-      showSigComparison(reuseSig1, signature, reuseMsg1Coefs!, reuseMsg2Coefs!);
-      el('forgery-prereq-msg').classList.add('hidden');
-      el('forgery-area').classList.remove('hidden');
+      renderReuseCaptures();
+      if (reuseCaptures.length >= 2) {
+        el('forgery-prereq-msg').classList.add('hidden');
+        el('forgery-area').classList.remove('hidden');
+      }
     } finally {
-      btn.innerHTML = 'Sign B (same leaf)';
+      btn.disabled = false;
+      btn.innerHTML = '↻ Reuse leaf q (+1 leaked signature)';
     }
   });
 
   el<HTMLButtonElement>('btn-forge').addEventListener('click', async () => {
-    if (!tree || !reuseSig1 || !reuseSig2 || !reuseMsg1Coefs || !reuseMsg2Coefs) return;
+    if (!tree || reuseCaptures.length < 2) return;
     const btn = el<HTMLButtonElement>('btn-forge');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span> Computing forgery\u2026';
+    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span> Computing forgery…';
     try {
       const targetText = el<HTMLTextAreaElement>('forgery-target-msg').value;
       const targetBytes = new TextEncoder().encode(targetText);
-      const { forgedSignature, attackDetails } = await demonstrateForgery(
-        tree, reuseSig1, reuseMsg1Coefs, reuseSig2, reuseMsg2Coefs, targetBytes, reuseLeafIndex
+      const captures = reuseCaptures.map(c => ({ message: c.message, signature: c.signature }));
+      const { forgedSignature, triesUsed, aTarget, reachableFloor } = await forgeFromReuse(
+        tree, captures, targetBytes, reuseLeafIndex
       );
-      const valid = await lmsVerify(targetBytes, forgedSignature, tree.id, tree.root);
-      const unreachable = attackDetails.filter(d => d.method.includes('unreachable')).length;
-      const forgeRows = [...attackDetails]
-        .sort((a, b) => Number(a.a1 === a.a2) - Number(b.a1 === b.a2))
-        .map(d => ({ i: d.i, a1: d.a1, a2: d.a2, target: d.aTarget }));
+      // Verify the forged signature against the REAL public key (tree root).
+      const valid = forgedSignature
+        ? await lmsVerify(targetBytes, forgedSignature, tree.id, tree.root)
+        : false;
+      const blocked = aTarget.filter((t, i) => t < reachableFloor[i]).length;
+      const forgeRows = reachableFloor
+        .map((floor, i) => ({ i, a1: floor, a2: floor, target: aTarget[i] }))
+        .sort((x, y) => (x.target - x.a1) - (y.target - y.a1))
+        .slice(0, 24);
       const resultDiv = el('forgery-result-content');
       resultDiv.innerHTML = `
         <div class="danger-box" style="margin-bottom:0.75rem;">
           <strong>Forgery result:</strong>
           ${valid
             ? '<span class="badge badge-valid" style="margin-left:0.5rem;">&#10003; FORGED SIGNATURE VERIFIES</span>'
-            : `<span class="badge badge-invalid" style="margin-left:0.5rem;">&#10007; Forgery incomplete (${unreachable} position${unreachable !== 1 ? 's' : ''} unreachable)</span>`
+            : `<span class="badge badge-invalid" style="margin-left:0.5rem;">&#10007; No randomizer found in ${triesUsed} tries (reuse the leaf a few more times)</span>`
           }
         </div>
-        <p class="text-muted" style="font-size:0.8rem;margin-bottom:0.5rem;">For the target message, each chain needs a node at step <code>t</code>. If <code>t ≥ min(a1, a2)</code> the attacker hashes forward to it (forgeable); if <code>t</code> falls below both known depths it&rsquo;s blocked. The <code>t</code> marker is outlined green when reachable, red when blocked:</p>
+        <p class="text-muted" style="font-size:0.8rem;margin-bottom:0.5rem;">Across the <strong>${reuseCaptures.length}</strong> leaked signatures the attacker holds each chain at its lowest revealed depth <code>floor[i]</code>. They grind the randomizer <code>C</code> until every target digit <code>t &ge; floor[i]</code>, then advance each held value forward to <code>t</code>. This forgery was found after <strong>${triesUsed}</strong> randomizer${triesUsed !== 1 ? 's' : ''}. The <code>t</code> marker is outlined green when reachable:</p>
         ${renderChainsCollapsible(forgeRows, 'reuse')}
         ${chainLegend('reuse')}
         <div class="result-panel">
-          <div class="result-row"><span class="result-key">Target msg</span><span class="result-value">${escapeHtml(targetText.slice(0,60))}${targetText.length > 60 ? '\u2026' : ''}</span></div>
-          <div class="result-row"><span class="result-key">Leaf reused</span><span class="result-value danger">${reuseLeafIndex}</span></div>
-          <div class="result-row"><span class="result-key">Reachable</span><span class="result-value accent">${P - unreachable}/${P} positions</span></div>
-          ${unreachable > 0 ? `<div class="result-row"><span class="result-key">Note</span><span class="result-value warning">Attacker chooses target message where all coefficients \u2265 min(a1,a2). Easily arranged in practice.</span></div>` : ''}
+          <div class="result-row"><span class="result-key">Target msg</span><span class="result-value">${escapeHtml(targetText.slice(0,60))}${targetText.length > 60 ? '…' : ''}</span></div>
+          <div class="result-row"><span class="result-key">Leaf reused</span><span class="result-value danger">${reuseLeafIndex} (${reuseCaptures.length} signatures)</span></div>
+          <div class="result-row"><span class="result-key">Randomizers tried</span><span class="result-value accent">${triesUsed}</span></div>
+          <div class="result-row"><span class="result-key">Verifies vs public key</span><span class="result-value ${valid ? 'accent' : 'warning'}">${valid ? 'YES — forged under the same root' : 'no'}</span></div>
         </div>
-        <div class="mt-1" style="font-size:0.78rem;color:var(--text-muted);">Attack method per position (first 15):
-          ${attackDetails.slice(0,15).map(d => `
-            <div class="sig-chain-elem ${d.method.includes('unreachable') ? 'differs' : ''}">
+        <div class="mt-1" style="font-size:0.78rem;color:var(--text-muted);">Reachable floor vs forged target depth (24 hardest positions) — floor is the lowest depth leaked across reuses, t the forged target:
+          ${forgeRows.map(d => `
+            <div class="sig-chain-elem ${d.target < d.a1 ? 'differs' : ''}">
               <span class="chain-idx">[${d.i}]</span>
-              <span>a1=${d.a1}, a2=${d.a2}, target=${d.aTarget} \u2192 ${d.method}</span>
+              <span>floor=${d.a1}, t=${d.target} → advance from step ${d.a1}</span>
             </div>
           `).join('')}
-          ${attackDetails.length > 15 ? `<div class="text-muted" style="margin-top:0.25rem;">\u2026 and ${attackDetails.length - 15} more</div>` : ''}
+          ${blocked > 0 ? `<div class="text-muted" style="margin-top:0.25rem;">${blocked} position(s) still below the floor for this randomizer — reuse the leaf more to lower them.</div>` : ''}
         </div>
       `;
       el('forgery-result').classList.remove('hidden');
@@ -841,38 +833,50 @@ function bindReuseEvents() {
   });
 }
 
-function showSigComparison(sig1: LmsSignature, sig2: LmsSignature, coefs1: number[], coefs2: number[]) {
+// Per-position minimum depth (floor) across all captured signatures.
+function reuseFloor(): number[] {
+  const floor = new Array<number>(P).fill(WOTS_STEPS - 1);
+  for (const c of reuseCaptures) {
+    for (let i = 0; i < P; i++) floor[i] = Math.min(floor[i], c.coefs[i]);
+  }
+  return floor;
+}
+
+function renderReuseCaptures() {
+  const k = reuseCaptures.length;
+  el('reuse-count-note').innerHTML = k <= 1
+    ? 'Enable "Force Key Reuse", then reuse the leaf several times — each click leaks another signature and lowers the attacker’s floor.'
+    : `<strong class="text-danger">${k} signatures leaked on leaf ${reuseLeafIndex}.</strong> The attacker now holds each chain at the lowest depth seen across all ${k}. Around eight reuses make forging an arbitrary message reliable.`;
+
   const maxShow = 20;
-  const diffs = coefs1.filter((c1, i) => c1 !== coefs2[i]).length;
-  el('sig-compare-display').innerHTML = `
-    <div class="sig-compare-col">
-      <h4>Message A \u2014 sig1[i] at step a1[i]</h4>
+  const floor = reuseFloor();
+  const recent = reuseCaptures.slice(-2);
+  const cols = recent.map((c, idx) => {
+    const globalIdx = reuseCaptures.length - recent.length + idx;
+    const label = globalIdx === 0 ? 'First signature' : `Reused signature #${globalIdx}`;
+    return `<div class="sig-compare-col">
+      <h4>${label} — depth a[i]</h4>
       ${Array.from({ length: Math.min(P, maxShow) }, (_, i) => `
-        <div class="sig-chain-elem ${coefs1[i] !== coefs2[i] ? 'differs' : ''}">
+        <div class="sig-chain-elem ${c.coefs[i] === floor[i] ? 'differs' : ''}">
           <span class="chain-idx">[${i}]</span>
-          <span>step=${coefs1[i]} | ${toHex(sig1.otsSignature[i].slice(0,4))}\u2026</span>
+          <span>step=${c.coefs[i]} | ${toHex(c.signature.otsSignature[i].slice(0,4))}…</span>
         </div>
       `).join('')}
-      ${P > maxShow ? `<div class="text-muted" style="font-size:0.72rem;">\u2026 +${P - maxShow} more</div>` : ''}
-    </div>
-    <div class="sig-compare-col">
-      <h4>Message B \u2014 sig2[i] at step a2[i]</h4>
-      ${Array.from({ length: Math.min(P, maxShow) }, (_, i) => `
-        <div class="sig-chain-elem ${coefs1[i] !== coefs2[i] ? 'differs' : ''}">
-          <span class="chain-idx">[${i}]</span>
-          <span>step=${coefs2[i]} | ${toHex(sig2.otsSignature[i].slice(0,4))}\u2026</span>
-        </div>
-      `).join('')}
-      ${P > maxShow ? `<div class="text-muted" style="font-size:0.72rem;">\u2026 +${P - maxShow} more</div>` : ''}
-    </div>
-  `;
-  const chainRows = pickReusePositions(coefs1, coefs2).map((i) => ({ i, a1: coefs1[i], a2: coefs2[i] }));
+      ${P > maxShow ? `<div class="text-muted" style="font-size:0.72rem;">… +${P - maxShow} more</div>` : ''}
+    </div>`;
+  }).join('');
+  el('sig-compare-display').innerHTML = cols;
+
+  const chainRows = [...floor.keys()]
+    .map(i => ({ i, a1: floor[i], a2: floor[i] }))
+    .sort((x, y) => x.a1 - y.a1);
+  const avgFloor = (floor.reduce((a, b) => a + b, 0) / P).toFixed(1);
   el('reuse-explanation').innerHTML = `
-    <span class="text-danger">\u26a0 ${diffs} of ${P} positions differ between the two signatures.</span>
-    At each position the attacker now knows the chain value at <em>two</em> depths &mdash; and can hash <em>forward</em> from the shallower one. So every step from <code>min(a1[i], a2[i])</code> onward is reachable. The shaded band below is that newly forgeable region (differing positions first):
+    <span class="text-danger">⚠ ${k} signature${k !== 1 ? 's' : ''} now leaked on this leaf.</span>
+    The attacker keeps, per position, the <em>lowest</em> depth seen and can hash <em>forward</em> from it. Every step from <code>floor[i]</code> onward is reachable (average floor now <code>${avgFloor}</code> of ${WOTS_STEPS - 1}). The shaded band below is the forgeable region — it widens with every reuse:
     ${renderChainsCollapsible(chainRows, 'reuse')}
     ${chainLegend('reuse')}
-    <span class="text-muted" style="display:block;margin-top:0.5rem;">Why one signature is <em>not</em> enough: to forge you must raise message digits, but the Winternitz checksum forces at least one checksum digit <em>down</em> &mdash; below the single depth you know &mdash; so it stays out of reach. A second reuse lowers your reachable floor at every position, and that protection collapses.</span>
+    <span class="text-muted" style="display:block;margin-top:0.5rem;">Why one signature is <em>not</em> enough: to forge you must raise message digits, but the Winternitz checksum forces at least one checksum digit <em>down</em> — below the single depth you know. Each extra reuse lowers the floor at more positions until an arbitrary message lands entirely within reach.</span>
   `;
 }
 
@@ -881,8 +885,11 @@ function showSigComparison(sig1: LmsSignature, sig2: LmsSignature, coefs1: numbe
 // ============================================================
 
 function renderHssGrids() {
-  const l1Active = Math.floor(hssTotalUsed / HSS_L2);
-  const l2Index = hssTotalUsed % HSS_L2;
+  // Grid state is derived from the REAL private key: rootTree.nextIndex counts
+  // consumed root leaves (= leaf trees activated), activeLeafTree.nextIndex is
+  // the current leaf tree's position.
+  const l1Active = hssPriv ? hssPriv.rootTree.nextIndex - 1 : 0; // active leaf-tree slot
+  const l2Index = hssPriv ? hssPriv.activeLeafTree.nextIndex : 0;
   const full = hssTotalUsed >= HSS_CAP;
   el('hss-l1-row').innerHTML = Array.from({ length: HSS_L1 }, (_, i) => {
     const used = i < l1Active;
@@ -894,27 +901,63 @@ function renderHssGrids() {
     const active = i === l2Index && !full;
     return `<div class="hss-node ${used ? 'used' : active ? 'active' : ''}" title="L2 slot ${i}">${used ? '✓' : active ? '▶' : i}</div>`;
   }).join('');
+  const verifyNote = hssTotalUsed > 0
+    ? ` | last signature: ${hssLastVerified ? '✓ verified end-to-end' : '✗ verify FAILED'}`
+    : '';
   el('hss-state-line').textContent =
-    `Level 1 index: ${Math.min(l1Active, HSS_L1)}/${HSS_L1} | Level 2 index: ${full ? HSS_L2 : l2Index}/${HSS_L2} | Total used: ${hssTotalUsed}/${HSS_CAP} signatures`;
+    `Active leaf tree: ${Math.max(0, l1Active)} of ${HSS_L1} | Leaf-tree index: ${full ? HSS_L2 : l2Index}/${HSS_L2} | Total signed: ${hssTotalUsed}/${HSS_CAP}${verifyNote}`;
 }
 
-function stepHss(n: number) {
-  const before = Math.floor(hssTotalUsed / HSS_L2);
-  hssTotalUsed = Math.min(HSS_CAP, hssTotalUsed + n);
-  const after = Math.floor(hssTotalUsed / HSS_L2);
-  renderHssGrids();
-  el('hss-rollover').classList.toggle('hidden', !(after > before) || hssTotalUsed >= HSS_CAP);
-  el('hss-full').classList.toggle('hidden', hssTotalUsed < HSS_CAP);
+async function ensureHss() {
+  if (!hssPriv || !hssPub) {
+    const { privateKey, publicKey } = await generateHss({ rootH: HSS_ROOT_H, leafH: HSS_LEAF_H, w: W });
+    hssPriv = privateKey;
+    hssPub = publicKey;
+  }
+}
+
+async function stepHss(n: number) {
+  if (hssBusy) return;
+  hssBusy = true;
+  try {
+    await ensureHss();
+    let rolled = false;
+    for (let k = 0; k < n; k++) {
+      if (hssTotalUsed >= HSS_CAP) break;
+      const msg = new TextEncoder().encode(`HSS message #${hssTotalUsed + 1}`);
+      const { signature, privateKey, rolledOver } = await hssSign(hssPriv!, msg);
+      hssPriv = privateKey;
+      // Verify the real HSS signature against the public key every time.
+      hssLastVerified = await hssVerify(msg, signature, hssPub!);
+      hssTotalUsed++;
+      if (rolledOver) rolled = true;
+    }
+    renderHssGrids();
+    el('hss-rollover').classList.toggle('hidden', !rolled || hssTotalUsed >= HSS_CAP);
+    el('hss-full').classList.toggle('hidden', hssTotalUsed < HSS_CAP);
+  } finally {
+    hssBusy = false;
+  }
 }
 
 function bindHssEvents() {
-  el<HTMLButtonElement>('hss-sign-1').addEventListener('click', () => stepHss(1));
-  el<HTMLButtonElement>('hss-sign-8').addEventListener('click', () => stepHss(HSS_L2));
-  el<HTMLButtonElement>('hss-reset').addEventListener('click', () => {
-    hssTotalUsed = 0;
-    renderHssGrids();
-    el('hss-rollover').classList.add('hidden');
-    el('hss-full').classList.add('hidden');
+  el<HTMLButtonElement>('hss-sign-1').addEventListener('click', () => { void stepHss(1); });
+  el<HTMLButtonElement>('hss-sign-8').addEventListener('click', () => { void stepHss(HSS_L2); });
+  el<HTMLButtonElement>('hss-reset').addEventListener('click', async () => {
+    if (hssBusy) return;
+    hssBusy = true;
+    try {
+      const { privateKey, publicKey } = await generateHss({ rootH: HSS_ROOT_H, leafH: HSS_LEAF_H, w: W });
+      hssPriv = privateKey;
+      hssPub = publicKey;
+      hssTotalUsed = 0;
+      hssLastVerified = false;
+      renderHssGrids();
+      el('hss-rollover').classList.add('hidden');
+      el('hss-full').classList.add('hidden');
+    } finally {
+      hssBusy = false;
+    }
   });
   renderHssGrids();
 }

@@ -1,76 +1,26 @@
 /**
- * LMS / HSS Implementation — NIST SP 800-208 / RFC 8554
+ * LMS + HSS Implementation — NIST SP 800-208 / RFC 8554
  *
- * Parameters: LMS-SHA256-M32-H5 + LMOTS-SHA256-N32-W4
- *   n = 32  (SHA-256 output bytes)
- *   h = 5   (tree height, 2^5 = 32 leaf nodes)
- *   w = 4   (Winternitz parameter)
- *   p = 67  (number of OTS chain elements)
- *   ls = 4  (checksum left-shift bits)
+ * This is a byte-faithful implementation of the Leighton-Micali Signature
+ * scheme and its Hierarchical variant (HSS). The LM-OTS core is validated
+ * against RFC 8554 Appendix F Test Case 1 (see test/rfc8554-vectors.test.ts).
  *
- * All SHA-256 calls are async via Web Crypto API.
+ * Demo parameter set:
+ *   LMS-SHA256-M32-H5  (n = 32, h = 5 -> 32 leaves per tree)
+ *   LMOTS-SHA256-N32-W4 (w = 4, p = 67, ls = 4)
+ *
+ * The LM-OTS routines are parameterized by w so the exact same code path can
+ * be exercised at w = 8 (p = 34, ls = 0) — the parameter set used by RFC 8554's
+ * published test vectors — proving byte-level interoperability.
+ *
+ * All SHA-256 calls go through the Web Crypto API.
  */
 
 // ============================================================
-// Parameters
+// Byte helpers
 // ============================================================
 
-export const N = 32;   // hash output length (bytes)
-export const H = 5;    // tree height
-export const W = 4;    // Winternitz parameter
-export const P = 67;   // chain elements per OTS key
-export const LS = 4;   // checksum left-shift
-const LEAF_COUNT = 1 << H; // 32
-
-// ============================================================
-// Types
-// ============================================================
-
-export interface WotsKey {
-  privateKey: Uint8Array[]; // p private key elements, each N bytes
-  publicKey: Uint8Array[];  // p public key elements, each N bytes
-  pkHash: Uint8Array;       // leaf hash = H(id || q || D_PBLC || pk[0]..pk[p-1])
-  used: boolean;
-}
-
-export interface LmsTree {
-  id: Uint8Array;           // 16-byte random identifier (I in RFC 8554)
-  height: number;           // h = 5
-  leaves: Uint8Array[];     // 2^h leaf hashes
-  nodes: Uint8Array[][];    // nodes[level][index], level 0 = leaves
-  root: Uint8Array;         // root hash = nodes[h][0]
-  otsKeys: WotsKey[];       // 2^h one-time key pairs
-  nextIndex: number;        // next unused leaf index (the state)
-}
-
-export interface LmsSignature {
-  leafIndex: number;
-  otsSignature: Uint8Array[];  // p signature elements
-  authPath: Uint8Array[];      // h sibling hashes (Merkle proof)
-}
-
-// ============================================================
-// Crypto utilities
-// ============================================================
-
-async function sha256(data: Uint8Array): Promise<Uint8Array> {
-  const buf = await crypto.subtle.digest('SHA-256', data as unknown as ArrayBuffer);
-  return new Uint8Array(buf);
-}
-
-function u32be(n: number): Uint8Array {
-  const b = new Uint8Array(4);
-  new DataView(b.buffer).setUint32(0, n >>> 0, false);
-  return b;
-}
-
-function u16be(n: number): Uint8Array {
-  const b = new Uint8Array(2);
-  new DataView(b.buffer).setUint16(0, n & 0xffff, false);
-  return b;
-}
-
-function concat(...arrays: Uint8Array[]): Uint8Array {
+export function concat(...arrays: Uint8Array[]): Uint8Array {
   let len = 0;
   for (const a of arrays) len += a.length;
   const out = new Uint8Array(len);
@@ -79,14 +29,34 @@ function concat(...arrays: Uint8Array[]): Uint8Array {
   return out;
 }
 
+function u8(n: number): Uint8Array {
+  return Uint8Array.of(n & 0xff);
+}
+
+function u16be(n: number): Uint8Array {
+  return Uint8Array.of((n >>> 8) & 0xff, n & 0xff);
+}
+
+function u32be(n: number): Uint8Array {
+  return Uint8Array.of((n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff);
+}
+
 export function toHex(bytes: Uint8Array): string {
   return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 export function fromHex(hex: string): Uint8Array {
-  const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  const compact = hex.replace(/\s+/g, '').toLowerCase();
+  const out = new Uint8Array(compact.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(compact.slice(i * 2, i * 2 + 2), 16);
   return out;
+}
+
+export function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let acc = 0;
+  for (let i = 0; i < a.length; i++) acc |= a[i] ^ b[i];
+  return acc === 0;
 }
 
 function randomBytes(n: number): Uint8Array {
@@ -95,463 +65,590 @@ function randomBytes(n: number): Uint8Array {
   return b;
 }
 
-// ============================================================
-// RFC 8554 domain-separation constants
-// ============================================================
-
-// D_PBLC  = 0x8080  (2-byte, used in OTS public key hash message prefix)
-// D_MESG  = 0x8181  (2-byte, used in OTS message hash prefix)
-// D_LEAF  = 0x8282  (2-byte, used in Merkle tree leaf node)
-// D_INTR  = 0x8383  (2-byte, used in Merkle tree internal node)
-// Per RFC 8554 Table 2:
-const D_PBLC = new Uint8Array([0x80, 0x80]);
-const D_MESG = new Uint8Array([0x81, 0x81]);
-const D_LEAF = new Uint8Array([0x82, 0x82]);
-const D_INTR = new Uint8Array([0x83, 0x83]);
+export async function sha256(data: Uint8Array): Promise<Uint8Array> {
+  const normalized = Uint8Array.from(data);
+  const buf = await crypto.subtle.digest('SHA-256', normalized as unknown as ArrayBuffer);
+  return new Uint8Array(buf);
+}
 
 // ============================================================
-// W-OTS+ Chain Function (RFC 8554 Section 3.1)
+// Demo parameters — LMS-SHA256-M32-H5 + LMOTS-SHA256-N32-W4
+// ============================================================
+
+export const N = 32;   // hash output length (bytes)
+export const H = 5;    // LMS tree height -> 2^5 = 32 leaves
+export const W = 4;    // Winternitz parameter for the demo
+export const LS = 4;   // checksum left-shift for w = 4
+
+// RFC 8554 Table 1 checksum left-shift ls, keyed by w.
+const LS_BY_W: Record<number, number> = { 1: 7, 2: 6, 4: 4, 8: 0 };
+
+export const P = otsChainCount(W); // 67 chain elements per OTS key
+
+/**
+ * Number of Winternitz chains p for the n=32 parameter sets, per RFC 8554
+ * Section 4.1: p = u + v where u = ceil(8n/w) and v is the number of w-bit
+ * digits needed for the checksum. For n=32: w=4 -> p=67, w=8 -> p=34.
+ */
+export function otsChainCount(w: number): number {
+  const u = Math.ceil((8 * N) / w);
+  const maxDigit = (1 << w) - 1;
+  // RFC 8554 Appendix B: v = ceil((floor(lg((2^w - 1) * u)) + 1) / w).
+  // (The ls left-shift only aligns the checksum within these v digits; it does
+  // not change how many digits are needed.) w=4 -> v=3; w=8 -> v=2.
+  const checksumBits = Math.floor(Math.log2(maxDigit * u)) + 1;
+  const v = Math.ceil(checksumBits / w);
+  return u + v;
+}
+
+// RFC 8554 domain-separation constants (Table 4 / Section 4).
+const D_PBLC = 0x8080;
+const D_MESG = 0x8181;
+const D_LEAF = 0x8282;
+const D_INTR = 0x8383;
+
+// ============================================================
+// Types
+// ============================================================
+
+export interface WotsKey {
+  x: Uint8Array[];          // p secret chain-start values, each N bytes
+  publicKey: Uint8Array[];  // p chain-end (public) values, each N bytes
+  K: Uint8Array;            // OTS public-key hash H(I||q||D_PBLC||y[0..p-1])
+  used: boolean;
+}
+
+export interface LmsTree {
+  id: Uint8Array;           // 16-byte identifier (I in RFC 8554)
+  height: number;
+  w: number;                // Winternitz parameter used for this tree
+  leaves: Uint8Array[];
+  nodes: Uint8Array[][];    // nodes[level][index], level 0 = leaves
+  root: Uint8Array;
+  otsKeys: WotsKey[];
+  nextIndex: number;
+}
+
+export interface LmsSignature {
+  leafIndex: number;
+  C: Uint8Array;               // per-signature randomizer (RFC 8554 §4.5)
+  otsSignature: Uint8Array[];  // p signature elements
+  authPath: Uint8Array[];      // h sibling hashes
+}
+
+// ============================================================
+// LM-OTS core (parameterized by w) — RFC 8554 Section 4
 // ============================================================
 
 /**
- * chain(x, i, s, id, q, chainIndex):
- *   Apply the iterative hash chain starting at step i, for s steps.
- *   Each step: x_j = H(id || u32(q) || u16(chainIndex) || u16(j) || 0xFF || x_{j-1})
- *   where j ranges from i+1 to i+s inclusive.
+ * Winternitz hash chain for OTS digit `i`. Advance `start` from step `from`
+ * up to (but not including) `toExclusive`:
+ *   tmp_{j+1} = H(I || u32(q) || u16(i) || u8(j) || tmp_j)
+ * The chain is one-way: a value at depth d can be advanced to any depth >= d,
+ * never reversed. That irreversibility is what makes leaf reuse catastrophic.
  */
 export async function chain(
-  x: Uint8Array,
-  i: number,
-  s: number,
-  id: Uint8Array,
+  I: Uint8Array,
   q: number,
-  chainIndex: number
+  i: number,
+  start: Uint8Array,
+  from: number,
+  toExclusive: number,
 ): Promise<Uint8Array> {
-  let tmp = x;
-  for (let j = i; j < i + s; j++) {
-    tmp = await sha256(concat(id, u32be(q), u16be(chainIndex), new Uint8Array([j]), tmp));
+  let tmp = start;
+  const prefix = concat(I, u32be(q), u16be(i));
+  for (let j = from; j < toExclusive; j++) {
+    tmp = await sha256(concat(prefix, u8(j), tmp));
   }
   return tmp;
 }
 
-// ============================================================
-// W-OTS+ Checksum / message formatting (RFC 8554 Section 3.3)
-// ============================================================
+/** Extract the i-th w-bit coefficient (big-endian) from byte string S. */
+export function coef(S: Uint8Array, i: number, w: number): number {
+  const bitOffset = i * w;
+  const byteIndex = Math.floor(bitOffset / 8);
+  const shift = 8 - w - (bitOffset % 8);
+  const mask = (1 << w) - 1;
+  // w <= 8 always aligns within a single byte for w in {1,2,4,8}.
+  return (S[byteIndex] >>> shift) & mask;
+}
 
-/**
- * Splits an n-byte hash into p w-bit integers (with checksum).
- * Returns array of length p with values in [0, 2^w - 1].
- */
-function coef(S: Uint8Array, i: number, w: number): number {
-  // Extract the i-th w-bit block from byte string S
-  const bitsPerByte = 8;
-  const startBit = i * w;
-  const byteIndex = Math.floor(startBit / bitsPerByte);
-  const bitOffset = startBit % bitsPerByte;
-  // We need up to 2 bytes
-  let val = S[byteIndex] << 8;
-  if (byteIndex + 1 < S.length) val |= S[byteIndex + 1];
-  val = (val >>> (16 - bitOffset - w)) & ((1 << w) - 1);
-  return val;
+/** RFC 8554 §4.4 checksum, returned as a 2-byte big-endian value. */
+export function checksum(Q: Uint8Array, w: number): Uint8Array {
+  const u = Math.ceil((8 * Q.length) / w);
+  const maxDigit = (1 << w) - 1;
+  let sum = 0;
+  for (let i = 0; i < u; i++) sum += maxDigit - coef(Q, i, w);
+  const ls = LS_BY_W[w] ?? 0;
+  return u16be((sum << ls) & 0xffff);
 }
 
 /**
- * Compute the message array a[0..p-1] per RFC 8554 Section 3.3:
- *   - First floor(8n/w) elements from message bytes
- *   - Then ls-bit checksum appended as remaining elements
+ * The p Winternitz digits signed by an LM-OTS signature: message digest
+ * Q = H(I || u32(q) || u16(D_MESG) || C || message) with its checksum appended,
+ * split into p coefficients of w bits. Shared by signing, verification, and the
+ * reuse-forgery attack so all three agree byte-for-byte.
  */
-function messageToCoefficients(msgHash: Uint8Array): number[] {
-  // Per RFC 8554 with n=32, w=4: u = floor(8*32/4) = 64, p = 67, ls = 4
-  const u = Math.floor((8 * N) / W);   // 64
-  const a: number[] = [];
-  
-  // a[0..u-1] from message
-  for (let i = 0; i < u; i++) {
-    a.push(coef(msgHash, i, W));
-  }
-  
-  // Checksum: sum of (2^w - 1 - a[i]) for i=0..u-1
-  const maxw = (1 << W) - 1;
-  let csum = 0;
-  for (let i = 0; i < u; i++) csum += maxw - a[i];
-  
-  // Append checksum bits: left-shift by ls bits, then extract in w-bit blocks
-  // ls = 4, so we left-shift csum by 4, giving ceil(ls + log2(u*(2^w-1))) / w remaining elements
-  // Per RFC 8554: v = ceil((floor(log2(w)) + 1 + floor(log2(u*(2^w-1)))) / w)
-  // For w=4, n=32: v = 3 checksum elements, total p = u + v = 64 + 3 = 67
-  const csumShifted = csum << LS; // shift left by ls = 4
-  
-  // Extract 3 w-bit elements from csumShifted (it's a small integer)
-  // We treat csumShifted as a big-endian 2-byte value padded to extract
-  // The v=3 check elements: indices u, u+1, u+2
-  const csumBytes = new Uint8Array(2);
-  csumBytes[0] = (csumShifted >> 8) & 0xff;
-  csumBytes[1] = csumShifted & 0xff;
-  
-  const v = P - u; // 3
-  for (let i = 0; i < v; i++) {
-    a.push(coef(csumBytes, i, W));
-  }
-  
-  return a; // length = P = 67
+export async function lmotsCoefficients(
+  I: Uint8Array,
+  q: number,
+  C: Uint8Array,
+  message: Uint8Array,
+  w: number,
+): Promise<number[]> {
+  const Q = await sha256(concat(I, u32be(q), u16be(D_MESG), C, message));
+  const QwithCksm = concat(Q, checksum(Q, w));
+  const p = otsChainCount(w);
+  return Array.from({ length: p }, (_, i) => coef(QwithCksm, i, w));
 }
 
-// ============================================================
-// W-OTS+ Key Generation (RFC 8554 Section 3.2)
-// ============================================================
-
-async function generateWotsKey(id: Uint8Array, q: number): Promise<WotsKey> {
-  // 1. Generate p random private key elements
-  const privateKey: Uint8Array[] = [];
-  for (let i = 0; i < P; i++) {
-    privateKey.push(randomBytes(N));
+/**
+ * Recover the candidate LM-OTS public-key hash Kc from a signature. Verification
+ * succeeds iff Kc equals the OTS public key committed in the LMS leaf.
+ * (RFC 8554 §4.6, Algorithm 4b — the value used in Appendix F.)
+ */
+export async function lmotsRecoverK(
+  I: Uint8Array,
+  q: number,
+  C: Uint8Array,
+  message: Uint8Array,
+  otsSignature: Uint8Array[],
+  w: number,
+): Promise<Uint8Array> {
+  const a = await lmotsCoefficients(I, q, C, message, w);
+  const maxDigit = (1 << w) - 1;
+  const z: Uint8Array[] = [];
+  for (let i = 0; i < a.length; i++) {
+    z.push(await chain(I, q, i, otsSignature[i], a[i], maxDigit));
   }
-  
-  // 2. Compute public key: pk[i] = chain(sk[i], 0, 2^w - 1, id, q, i)
-  const maxw = (1 << W) - 1;
+  return sha256(concat(I, u32be(q), u16be(D_PBLC), ...z));
+}
+
+async function generateWotsKey(I: Uint8Array, q: number, w: number): Promise<WotsKey> {
+  const p = otsChainCount(w);
+  const maxDigit = (1 << w) - 1;
+  const x: Uint8Array[] = [];
   const publicKey: Uint8Array[] = [];
-  for (let i = 0; i < P; i++) {
-    publicKey.push(await chain(privateKey[i], 0, maxw, id, q, i));
+  for (let i = 0; i < p; i++) {
+    const start = randomBytes(N);
+    x.push(start);
+    publicKey.push(await chain(I, q, i, start, 0, maxDigit));
   }
-  
-  // 3. Compute leaf hash: pkHash = H(id || u32(q) || D_PBLC || pk[0] || ... || pk[p-1])
-  const pkHash = await sha256(concat(id, u32be(q), D_PBLC, ...publicKey));
-  
-  return { privateKey, publicKey, pkHash, used: false };
+  const K = await sha256(concat(I, u32be(q), u16be(D_PBLC), ...publicKey));
+  return { x, publicKey, K, used: false };
 }
-
-// ============================================================
-// W-OTS+ Signing (RFC 8554 Section 3.3)
-// ============================================================
 
 async function wotsSign(
-  msgHash: Uint8Array,
+  I: Uint8Array,
+  q: number,
+  C: Uint8Array,
+  message: Uint8Array,
   key: WotsKey,
-  id: Uint8Array,
-  q: number
+  w: number,
 ): Promise<Uint8Array[]> {
-  const a = messageToCoefficients(msgHash);
-  // RFC 8554 Section 3.3: sig[i] = chain(sk[i], 0, a[i]) — value at step a[i]
+  const a = await lmotsCoefficients(I, q, C, message, w);
   const sig: Uint8Array[] = [];
-  for (let i = 0; i < P; i++) {
-    sig.push(await chain(key.privateKey[i], 0, a[i], id, q, i));
+  for (let i = 0; i < a.length; i++) {
+    sig.push(await chain(I, q, i, key.x[i], 0, a[i]));
   }
   return sig;
 }
 
 // ============================================================
-// W-OTS+ Verification: recover public key from signature
+// LMS Merkle tree — RFC 8554 Section 5
 // ============================================================
 
-async function wotsRecoverPublicKey(
-  msgHash: Uint8Array,
-  sig: Uint8Array[],
-  id: Uint8Array,
-  q: number
-): Promise<Uint8Array[]> {
-  const a = messageToCoefficients(msgHash);
-  const maxw = (1 << W) - 1;
-  const pk: Uint8Array[] = [];
-  for (let i = 0; i < P; i++) {
-    pk.push(await chain(sig[i], a[i], maxw - a[i], id, q, i));
-  }
-  return pk;
+/** RFC 8554 §5.3 node numbering: leaf q is node 2^h + q; root is node 1. */
+function nodeNum(h: number, level: number, index: number): number {
+  return (1 << (h - level)) + index;
 }
 
-// ============================================================
-// Merkle tree node index encoding (RFC 8554)
-// ============================================================
+export async function generateLmsTree(
+  opts: { h?: number; w?: number; id?: Uint8Array } = {},
+): Promise<LmsTree> {
+  const h = opts.h ?? H;
+  const w = opts.w ?? W;
+  const leafCount = 1 << h;
+  const id = opts.id ?? randomBytes(16);
 
-/**
- * Per RFC 8554 Section 5.3:
- *   For leaf nodes (level 0): r = 2^h + q
- *   For internal nodes: r = (2^(h-level)) + index  ... but the spec
- *   actually numbers nodes 1..2^(h+1)-1 with root=1.
- *   Leaf node q has r = 2^h + q.
- *   Internal node at level lev (0=leaves, h=root), index i has r = 2^(h-lev) + i.
- */
-function nodeNum(level: number, index: number): number {
-  // level 0 = leaves (bottom), level h = root (top)
-  return (1 << (H - level)) + index;
-}
-
-// ============================================================
-// LMS Tree Construction
-// ============================================================
-
-export async function generateLmsTree(): Promise<LmsTree> {
-  const id = randomBytes(16);
-  
-  // Generate all 2^h W-OTS+ keypairs
   const otsKeys: WotsKey[] = [];
-  for (let q = 0; q < LEAF_COUNT; q++) {
-    otsKeys.push(await generateWotsKey(id, q));
+  for (let q = 0; q < leafCount; q++) {
+    otsKeys.push(await generateWotsKey(id, q, w));
   }
-  
-  // Leaf hashes = pkHash for each OTS key, wrapped with D_LEAF
-  // Per RFC 8554 Section 5.3:
-  //   T(r) at leaf: H(I || u32(r) || D_LEAF || OTS_PK_HASH(q))
-  // where r = 2^h + q
+
   const leaves: Uint8Array[] = [];
-  for (let q = 0; q < LEAF_COUNT; q++) {
-    const r = nodeNum(0, q); // 2^h + q = 32 + q
-    const leafNode = await sha256(concat(id, u32be(r), D_LEAF, otsKeys[q].pkHash));
-    leaves.push(leafNode);
+  for (let q = 0; q < leafCount; q++) {
+    const r = nodeNum(h, 0, q);
+    leaves.push(await sha256(concat(id, u32be(r), u16be(D_LEAF), otsKeys[q].K)));
   }
-  
-  // Build Merkle tree bottom-up
-  // nodes[level][index]: level 0 = leaves, level h = root
-  const nodes: Uint8Array[][] = [];
-  nodes[0] = leaves;
-  
-  for (let level = 1; level <= H; level++) {
+
+  const nodes: Uint8Array[][] = [leaves];
+  for (let level = 1; level <= h; level++) {
     const levelNodes: Uint8Array[] = [];
-    const nodesAtLevel = 1 << (H - level);
-    for (let i = 0; i < nodesAtLevel; i++) {
-      const r = nodeNum(level, i);
-      // children are nodes[level-1][2i] and nodes[level-1][2i+1]
-      const inner = await sha256(concat(
-        id, u32be(r), D_INTR,
+    const count = 1 << (h - level);
+    for (let i = 0; i < count; i++) {
+      const r = nodeNum(h, level, i);
+      levelNodes.push(await sha256(concat(
+        id, u32be(r), u16be(D_INTR),
         nodes[level - 1][2 * i],
-        nodes[level - 1][2 * i + 1]
-      ));
-      levelNodes.push(inner);
+        nodes[level - 1][2 * i + 1],
+      )));
     }
     nodes[level] = levelNodes;
   }
-  
-  const root = nodes[H][0];
-  
-  return {
-    id,
-    height: H,
-    leaves,
-    nodes,
-    root,
-    otsKeys,
-    nextIndex: 0,
-  };
+
+  return { id, height: h, w, leaves, nodes, root: nodes[h][0], otsKeys, nextIndex: 0 };
 }
 
-// ============================================================
-// LMS Signing
-// ============================================================
+function authPathFor(tree: LmsTree, q: number): Uint8Array[] {
+  const authPath: Uint8Array[] = [];
+  let nodeIndex = q;
+  for (let level = 0; level < tree.height; level++) {
+    const siblingIndex = nodeIndex % 2 === 0 ? nodeIndex + 1 : nodeIndex - 1;
+    authPath.push(tree.nodes[level][siblingIndex]);
+    nodeIndex = Math.floor(nodeIndex / 2);
+  }
+  return authPath;
+}
 
 export async function lmsSign(
   tree: LmsTree,
-  message: Uint8Array
+  message: Uint8Array,
 ): Promise<{ signature: LmsSignature; updatedTree: LmsTree }> {
-  if (tree.nextIndex >= LEAF_COUNT) {
-    throw new Error(`LMS tree exhausted: all ${LEAF_COUNT} one-time keys have been used`);
+  const leafCount = 1 << tree.height;
+  if (tree.nextIndex >= leafCount) {
+    throw new Error(`LMS tree exhausted: all ${leafCount} one-time keys have been used`);
   }
-  
   const q = tree.nextIndex;
-  
-  // Hash the message with domain separator D_MESG
-  // Per RFC 8554: msgHash = H(id || u32(q) || D_MESG || message)
-  const msgHash = await sha256(concat(tree.id, u32be(q), D_MESG, message));
-  
-  // Compute W-OTS+ signature
-  const otsSignature = await wotsSign(msgHash, tree.otsKeys[q], tree.id, q);
-  
-  // Collect auth path: sibling nodes at each level on the path from leaf q to root
-  const authPath: Uint8Array[] = [];
-  let nodeIndex = q;
-  for (let level = 0; level < H; level++) {
-    const siblingIndex = nodeIndex % 2 === 0 ? nodeIndex + 1 : nodeIndex - 1;
-    authPath.push(tree.nodes[level][siblingIndex]);
-    nodeIndex = Math.floor(nodeIndex / 2);
-  }
-  
-  // Clone tree and update state
-  const updatedKeys = tree.otsKeys.map((k, i) =>
-    i === q ? { ...k, used: true } : k
-  );
-  
-  const updatedTree: LmsTree = {
-    ...tree,
-    otsKeys: updatedKeys,
-    nextIndex: tree.nextIndex + 1,
-  };
-  
-  return {
-    signature: { leafIndex: q, otsSignature, authPath },
-    updatedTree,
-  };
+  const C = randomBytes(N);
+  const otsSignature = await wotsSign(tree.id, q, C, message, tree.otsKeys[q], tree.w);
+  const authPath = authPathFor(tree, q);
+
+  const updatedKeys = tree.otsKeys.map((k, i) => (i === q ? { ...k, used: true } : k));
+  const updatedTree: LmsTree = { ...tree, otsKeys: updatedKeys, nextIndex: tree.nextIndex + 1 };
+
+  return { signature: { leafIndex: q, C, otsSignature, authPath }, updatedTree };
 }
 
-// ============================================================
-// LMS Signing with forced reuse (for Section C demo)
-// ============================================================
-
+/** Force-reuse a specific leaf (Section C demonstration only). */
 export async function lmsSignForceReuse(
   tree: LmsTree,
   message: Uint8Array,
-  leafIndex: number
+  leafIndex: number,
 ): Promise<{ signature: LmsSignature }> {
   const q = leafIndex;
-  const msgHash = await sha256(concat(tree.id, u32be(q), D_MESG, message));
-  const otsSignature = await wotsSign(msgHash, tree.otsKeys[q], tree.id, q);
-  
-  const authPath: Uint8Array[] = [];
-  let nodeIndex = q;
-  for (let level = 0; level < H; level++) {
-    const siblingIndex = nodeIndex % 2 === 0 ? nodeIndex + 1 : nodeIndex - 1;
-    authPath.push(tree.nodes[level][siblingIndex]);
-    nodeIndex = Math.floor(nodeIndex / 2);
-  }
-  
-  return { signature: { leafIndex: q, otsSignature, authPath } };
+  const C = randomBytes(N);
+  const otsSignature = await wotsSign(tree.id, q, C, message, tree.otsKeys[q], tree.w);
+  const authPath = authPathFor(tree, q);
+  return { signature: { leafIndex: q, C, otsSignature, authPath } };
 }
-
-// ============================================================
-// LMS Verification
-// ============================================================
 
 export async function lmsVerify(
   message: Uint8Array,
   signature: LmsSignature,
   id: Uint8Array,
-  publicKey: Uint8Array  // the root hash
+  publicKey: Uint8Array,
+  w: number = W,
+  h: number = H,
 ): Promise<boolean> {
-  const { leafIndex: q, otsSignature, authPath } = signature;
-  
-  // Recompute message hash
-  const msgHash = await sha256(concat(id, u32be(q), D_MESG, message));
-  
-  // Recover W-OTS+ public key from signature
-  const recoveredPk = await wotsRecoverPublicKey(msgHash, otsSignature, id, q);
-  
-  // Recompute pkHash
-  const recoveredPkHash = await sha256(concat(id, u32be(q), D_PBLC, ...recoveredPk));
-  
-  // Recompute leaf node
-  const r0 = nodeNum(0, q);
-  let node = await sha256(concat(id, u32be(r0), D_LEAF, recoveredPkHash));
-  
-  // Walk auth path from leaf to root
+  const { leafIndex: q, C, otsSignature, authPath } = signature;
+  if (authPath.length !== h) return false;
+
+  const Kc = await lmotsRecoverK(id, q, C, message, otsSignature, w);
+  let node = await sha256(concat(id, u32be(nodeNum(h, 0, q)), u16be(D_LEAF), Kc));
+
   let nodeIndex = q;
-  for (let level = 0; level < H; level++) {
-    const r = nodeNum(level + 1, Math.floor(nodeIndex / 2));
+  for (let level = 0; level < h; level++) {
+    const r = nodeNum(h, level + 1, Math.floor(nodeIndex / 2));
     const sibling = authPath[level];
-    if (nodeIndex % 2 === 0) {
-      node = await sha256(concat(id, u32be(r), D_INTR, node, sibling));
-    } else {
-      node = await sha256(concat(id, u32be(r), D_INTR, sibling, node));
-    }
+    node = nodeIndex % 2 === 0
+      ? await sha256(concat(id, u32be(r), u16be(D_INTR), node, sibling))
+      : await sha256(concat(id, u32be(r), u16be(D_INTR), sibling, node));
     nodeIndex = Math.floor(nodeIndex / 2);
   }
-  
-  // Compare recomputed root with publicKey
-  if (node.length !== publicKey.length) return false;
-  for (let i = 0; i < node.length; i++) {
-    if (node[i] !== publicKey[i]) return false;
-  }
-  return true;
+  return bytesEqual(node, publicKey);
 }
 
-// ============================================================
-// Forgery demonstration (Section C)
-// ============================================================
-
-/**
- * Given two signatures on different messages from the same leaf,
- * demonstrate the forgery attack by constructing a valid signature
- * for a new target message.
- *
- * The attack: for each position i where a2[i] < a1[i],
- * the attacker can extend sig2[i] forward by (a1[i] - a2[i]) steps
- * to recover the private key element at step a1[i].
- *
- * For positions where a_target[i] <= a1[i], they can reconstruct
- * from sig1[i] (going from a1[i] forward to target).
- * For positions where a_target[i] <= a2[i], they can reconstruct
- * from sig2[i].
- *
- * In general: for each i, they can compute sk[i] at step min(a1[i], a2[i])
- * by extending the smaller-step signature, then chain forward to a_target[i].
- */
-export async function demonstrateForgery(
-  tree: LmsTree,
-  sig1: LmsSignature,
-  msg1Coefficients: number[],
-  sig2: LmsSignature,
-  msg2Coefficients: number[],
-  targetMessage: Uint8Array,
-  leafIndex: number
-): Promise<{
-  forgedSignature: LmsSignature;
-  attackDetails: Array<{ i: number; a1: number; a2: number; aTarget: number; method: string }>;
-}> {
-  const q = leafIndex;
-  const id = tree.id;
-  
-  const targetMsgHash = await sha256(concat(id, u32be(q), D_MESG, targetMessage));
-  const aTarget = messageToCoefficients(targetMsgHash);
-  
-  const forgedOtsSig: Uint8Array[] = [];
-  const attackDetails: Array<{ i: number; a1: number; a2: number; aTarget: number; method: string }> = [];
-  
-  for (let i = 0; i < P; i++) {
-    const a1 = msg1Coefficients[i];
-    const a2 = msg2Coefficients[i];
-    const at = aTarget[i];
-    
-    let elem: Uint8Array;
-    let method: string;
-    
-    // RFC 8554 signing: sig[i] = chain(sk[i], 0, a[i]) → value at step a[i]
-    // sig1[i] is the chain value at step a1[i], sig2[i] at step a2[i].
-    //
-    // The attacker can extend either known value forward (cannot go backward).
-    // To forge at step a_target[i]:
-    //   if at >= a1[i]: extend sig1[i] by (at - a1) steps
-    //   elif at >= a2[i]: extend sig2[i] by (at - a2) steps
-    //   else: unreachable (need value earlier than any we have)
-    
-    if (at >= a1) {
-      elem = await chain(sig1.otsSignature[i], a1, at - a1, id, q, i);
-      method = `extend sig1 (step ${a1} → ${at})`;
-    } else if (at >= a2) {
-      elem = await chain(sig2.otsSignature[i], a2, at - a2, id, q, i);
-      method = `extend sig2 (step ${a2} → ${at})`;
-    } else {
-      // Can't reach step at — use whichever is closer (forgery will fail at this position)
-      const closerStep = a1 <= a2 ? a1 : a2;
-      const closerSig = a1 <= a2 ? sig1.otsSignature[i] : sig2.otsSignature[i];
-      elem = await chain(closerSig, closerStep, 0, id, q, i);
-      method = `unreachable — using step ${closerStep} (forgery may fail at position ${i})`;
-    }
-    
-    forgedOtsSig.push(elem);
-    attackDetails.push({ i, a1, a2, aTarget: at, method });
-  }
-  
-  // Auth path is the same (same leaf)
-  const authPath = sig1.authPath;
-  
-  return {
-    forgedSignature: { leafIndex: q, otsSignature: forgedOtsSig, authPath },
-    attackDetails,
-  };
-}
-
-/**
- * Compute message coefficients for display/comparison purposes
- */
+/** Coefficients (chain depths) for a given (message, C) under leaf q. */
 export async function getMsgCoefficients(
   message: Uint8Array,
   id: Uint8Array,
-  q: number
+  q: number,
+  C: Uint8Array,
+  w: number = W,
 ): Promise<number[]> {
-  const msgHash = await sha256(concat(id, u32be(q), D_MESG, message));
-  return messageToCoefficients(msgHash);
+  return lmotsCoefficients(id, q, C, message, w);
+}
+
+export function signatureSizeBytes(w: number = W, h: number = H): number {
+  return otsChainCount(w) * N + N /* C */ + h * N;
+}
+
+// ============================================================
+// Reuse forgery (Section C) — a real W-OTS+ grinding attack
+// ============================================================
+
+/**
+ * A signature captured by the attacker: the message it signed and the full LMS
+ * signature (which carries the per-signature randomizer C).
+ */
+export interface CapturedSignature {
+  message: Uint8Array;
+  signature: LmsSignature;
 }
 
 /**
- * Signature size in bytes
+ * Forge a valid LMS signature on a target message from several genuine
+ * signatures that all reused the SAME leaf.
+ *
+ * This is the real attack, not a shortcut. A Winternitz chain value at depth d
+ * can be advanced to any depth >= d but never reversed. Each captured signature
+ * reveals, per position i, the chain value at depth a(i). Across k reuses the
+ * attacker holds each position's value at the LOWEST depth seen:
+ *   floor[i] = min over captures of a(i).
+ * The forge step grinds the per-signature randomizer C until every target digit
+ * at[i] >= floor[i], then advances each held value forward to at[i]. No secret
+ * key material is ever read - only the published signatures. The more the leaf
+ * was reused, the lower the floors and the wider the reachable space, which is
+ * exactly why reuse is catastrophic (2 reuses of this w=4 set rarely suffice;
+ * ~8 reliably forge - see test/lms.test.ts).
  */
-export function signatureSizeBytes(): number {
-  // OTS sig: P × N  + auth path: H × N
-  return P * N + H * N;
+export async function forgeFromReuse(
+  tree: LmsTree,
+  captures: CapturedSignature[],
+  targetMessage: Uint8Array,
+  leafIndex: number,
+  maxTries = 200000,
+): Promise<{
+  forgedSignature: LmsSignature | null;
+  triesUsed: number;
+  perSignatureDepths: number[][];
+  aTarget: number[];
+  reachableFloor: number[];
+}> {
+  const q = leafIndex;
+  const I = tree.id;
+  const w = tree.w;
+  const p = otsChainCount(w);
+
+  // Distil the captures into per-position minimum depth + the value held there.
+  const floor = new Array<number>(p).fill(Number.POSITIVE_INFINITY);
+  const floorSig = new Array<Uint8Array>(p);
+  const perSignatureDepths: number[][] = [];
+  for (const cap of captures) {
+    const depths = await lmotsCoefficients(I, q, cap.signature.C, cap.message, w);
+    perSignatureDepths.push(depths);
+    for (let i = 0; i < p; i++) {
+      if (depths[i] < floor[i]) {
+        floor[i] = depths[i];
+        floorSig[i] = cap.signature.otsSignature[i];
+      }
+    }
+  }
+
+  // Grind the randomizer C until every target coefficient is >= its floor.
+  let tries = 0;
+  let chosenC: Uint8Array | null = null;
+  let aTarget: number[] = [];
+  while (tries < maxTries) {
+    const C = randomBytes(N);
+    const at = await lmotsCoefficients(I, q, C, targetMessage, w);
+    tries++;
+    let ok = true;
+    for (let i = 0; i < p; i++) {
+      if (at[i] < floor[i]) { ok = false; break; }
+    }
+    if (ok) { chosenC = C; aTarget = at; break; }
+  }
+
+  if (!chosenC) {
+    return {
+      forgedSignature: null,
+      triesUsed: tries,
+      perSignatureDepths,
+      aTarget: aTarget.length ? aTarget : new Array(p).fill(0),
+      reachableFloor: floor,
+    };
+  }
+
+  // Advance each held chain value forward from its floor depth to at[i].
+  const forgedOts: Uint8Array[] = [];
+  for (let i = 0; i < p; i++) {
+    forgedOts.push(await chain(I, q, i, floorSig[i], floor[i], aTarget[i]));
+  }
+
+  return {
+    forgedSignature: {
+      leafIndex: q,
+      C: chosenC,
+      otsSignature: forgedOts,
+      authPath: captures[0].signature.authPath,
+    },
+    triesUsed: tries,
+    perSignatureDepths,
+    aTarget,
+    reachableFloor: floor,
+  };
+}
+
+// ============================================================
+// HSS — Hierarchical Signature System (RFC 8554 Section 6)
+// ============================================================
+
+export interface HssPrivateKey {
+  L: number;                 // number of levels (2 in this demo)
+  rootTree: LmsTree;         // level-0 tree, signs level-1 public keys
+  activeLeafTree: LmsTree;   // current level-1 tree, signs messages
+  rootSigOfLeaf: LmsSignature; // root's signature over the active leaf's pubkey
+  leafH: number;             // height of leaf trees
+  leafW: number;
+}
+
+export interface HssPublicKey {
+  L: number;
+  rootId: Uint8Array;
+  rootRoot: Uint8Array;      // root LMS public key (the HSS public key)
+  rootH: number;
+  rootW: number;
+}
+
+export interface HssSignature {
+  levelUsed: number;         // index of the active leaf tree under the root
+  rootSigOfLeaf: LmsSignature;
+  leafId: Uint8Array;
+  leafRoot: Uint8Array;      // active leaf tree's LMS public key
+  leafH: number;
+  leafW: number;
+  leafSig: LmsSignature;     // signature over the actual message
+}
+
+/** Encode a leaf tree's LMS public key as the message the root tree signs. */
+function encodeLeafPubKey(levelUsed: number, id: Uint8Array, root: Uint8Array, h: number, w: number): Uint8Array {
+  return concat(u32be(levelUsed), id, root, u32be(h), u32be(w));
+}
+
+export async function generateHss(
+  opts: { rootH?: number; leafH?: number; w?: number } = {},
+): Promise<{ privateKey: HssPrivateKey; publicKey: HssPublicKey }> {
+  const rootH = opts.rootH ?? 3;
+  const leafH = opts.leafH ?? 3;
+  const w = opts.w ?? W;
+
+  const rootTree = await generateLmsTree({ h: rootH, w });
+  const leafTree = await generateLmsTree({ h: leafH, w });
+
+  const msg = encodeLeafPubKey(0, leafTree.id, leafTree.root, leafH, w);
+  const { signature: rootSig, updatedTree: rootAfter } = await lmsSign(rootTree, msg);
+
+  return {
+    privateKey: {
+      L: 2,
+      rootTree: rootAfter,
+      activeLeafTree: leafTree,
+      rootSigOfLeaf: rootSig,
+      leafH,
+      leafW: w,
+    },
+    publicKey: {
+      L: 2,
+      rootId: rootTree.id,
+      rootRoot: rootTree.root,
+      rootH,
+      rootW: w,
+    },
+  };
+}
+
+/** Total capacity of a two-level HSS = 2^rootH * 2^leafH. */
+export function hssCapacity(pk: HssPublicKey, leafH: number): number {
+  return (1 << pk.rootH) * (1 << leafH);
+}
+
+export interface HssSignResult {
+  signature: HssSignature;
+  privateKey: HssPrivateKey;
+  rolledOver: boolean;
+}
+
+/**
+ * Sign a message with HSS. When the active leaf tree is exhausted a fresh leaf
+ * tree is generated and the root tree signs its public key (a roll-over). This
+ * is real signing: the returned signature carries both LMS signatures and
+ * verifies end to end.
+ */
+export async function hssSign(
+  privateKey: HssPrivateKey,
+  message: Uint8Array,
+): Promise<HssSignResult> {
+  let pk = privateKey;
+  let rolledOver = false;
+
+  const leafLeafCount = 1 << pk.leafH;
+  if (pk.activeLeafTree.nextIndex >= leafLeafCount) {
+    const rootLeafCount = 1 << pk.rootTree.height;
+    if (pk.rootTree.nextIndex >= rootLeafCount) {
+      throw new Error('HSS exhausted: root tree has no remaining leaf-tree slots');
+    }
+    const newLeaf = await generateLmsTree({ h: pk.leafH, w: pk.leafW });
+    const levelUsed = pk.rootTree.nextIndex;
+    const encoded = encodeLeafPubKey(levelUsed, newLeaf.id, newLeaf.root, pk.leafH, pk.leafW);
+    const { signature: rootSig, updatedTree: rootAfter } = await lmsSign(pk.rootTree, encoded);
+    pk = { ...pk, rootTree: rootAfter, activeLeafTree: newLeaf, rootSigOfLeaf: rootSig };
+    rolledOver = true;
+  }
+
+  // levelUsed = index of the leaf tree currently active under the root. It is
+  // the root leaf that was consumed to sign the active leaf's public key.
+  const levelUsed = pk.rootTree.nextIndex - 1;
+
+  const { signature: leafSig, updatedTree: leafAfter } = await lmsSign(pk.activeLeafTree, message);
+  pk = { ...pk, activeLeafTree: leafAfter };
+
+  const signature: HssSignature = {
+    levelUsed,
+    rootSigOfLeaf: pk.rootSigOfLeaf,
+    leafId: pk.activeLeafTree.id,
+    leafRoot: pk.activeLeafTree.root,
+    leafH: pk.leafH,
+    leafW: pk.leafW,
+    leafSig,
+  };
+
+  return { signature, privateKey: pk, rolledOver };
+}
+
+export async function hssVerify(
+  message: Uint8Array,
+  signature: HssSignature,
+  publicKey: HssPublicKey,
+): Promise<boolean> {
+  if (publicKey.L !== 2) return false;
+
+  // 1. The root tree must have signed the leaf tree's public key.
+  const encoded = encodeLeafPubKey(
+    signature.levelUsed,
+    signature.leafId,
+    signature.leafRoot,
+    signature.leafH,
+    signature.leafW,
+  );
+  const rootOk = await lmsVerify(
+    encoded,
+    signature.rootSigOfLeaf,
+    publicKey.rootId,
+    publicKey.rootRoot,
+    publicKey.rootW,
+    publicKey.rootH,
+  );
+  if (!rootOk) return false;
+
+  // 2. The leaf tree must have signed the message.
+  return lmsVerify(
+    message,
+    signature.leafSig,
+    signature.leafId,
+    signature.leafRoot,
+    signature.leafW,
+    signature.leafH,
+  );
 }
