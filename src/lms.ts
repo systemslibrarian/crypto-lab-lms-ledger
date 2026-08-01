@@ -385,7 +385,7 @@ export function signatureSizeBytes(w: number = W, h: number = H): number {
 }
 
 // ============================================================
-// Reuse forgery (Section C) — a real W-OTS+ grinding attack
+// Reuse forgery (Section C) — a real LM-OTS grinding attack
 // ============================================================
 
 /**

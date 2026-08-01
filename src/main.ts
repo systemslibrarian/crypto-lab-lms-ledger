@@ -55,7 +55,7 @@ let hssLastVerified = false;
 let hssBusy = false;
 
 // ============================================================
-// W-OTS+ hash-chain visualizer (teaching device)
+// LM-OTS hash-chain visualizer (teaching device)
 // Each chain is 2^w = 16 nodes: step 0 = sk (secret), step 15 = pk (public).
 // A signature reveals the chain value at step a[i]; the verifier re-derives
 // everything from there up to pk. Reuse reveals a second, lower depth.
@@ -151,7 +151,7 @@ function renderApp(): string {
   return `
 <div id="init-overlay" role="status" aria-live="polite">
   <span class="spinner" aria-hidden="true"></span>
-  <span>Generating LMS tree (32 W-OTS+ keypairs)\u2026</span>
+  <span>Generating LMS tree (32 LM-OTS keypairs)\u2026</span>
 </div>
 
 <a class="skip-link" href="#section-a">Skip to content</a>
@@ -173,7 +173,7 @@ function renderApp(): string {
   <div class="cl-hero-main">
     <h1 class="cl-hero-title">LMS Ledger</h1>
     <p class="cl-hero-sub">LMS/HSS &middot; NIST SP 800-208 &middot; RFC 8554</p>
-    <p class="cl-hero-desc">Build an LMS Merkle tree of one-time W-OTS+ keys and sign message by message, watching the nextIndex state advance so each leaf is spent exactly once.</p>
+    <p class="cl-hero-desc">Build an LMS Merkle tree of one-time LM-OTS keys and sign message by message, watching the nextIndex state advance so each leaf is spent exactly once.</p>
   </div>
   <aside class="cl-hero-why" aria-label="Why it matters">
     <span class="cl-hero-why-label">WHY IT MATTERS</span>
@@ -190,13 +190,13 @@ function renderApp(): string {
   <div class="card">
     <h3>A1 &mdash; Hash-based signatures from one-time keys</h3>
     <p>The conceptual foundation is the <strong>Lamport one-time signature</strong>. To sign a 1-bit message <em>b</em>: publish <code>H(sk_b)</code> as the public key. The signature is <code>sk_b</code> &mdash; the verifier checks <code>H(sk_b)</code> matches the published value. The key can only be used once: revealing <code>sk_0</code> to sign a <code>0</code> makes it impossible to later sign a <code>1</code> securely.</p>
-    <p><strong>W-OTS+</strong> (Winternitz One-Time Signature, RFC 8554 &sect;3) generalizes this using hash chains. Per the RFC &sect;3.3 signing algorithm: <code>sig[i] = chain(sk[i], 0, a[i])</code> where <code>a[i]</code> is the <em>i</em>-th <em>w</em>-bit coefficient of the message hash. Verification completes the chain: <code>chain(sig[i], a[i], 2^w&minus;1&minus;a[i])</code> must recover <code>pk[i]</code>.</p>
+    <p><strong>LM-OTS</strong> (the Winternitz one-time signature of RFC 8554 &sect;4 &mdash; a relative of, but not the same scheme as, XMSS/SLH-DSA's WOTS+) generalizes this using hash chains. Per the RFC &sect;4.5 signature-generation algorithm: <code>sig[i] = chain(sk[i], 0, a[i])</code> where <code>a[i]</code> is the <em>i</em>-th <em>w</em>-bit coefficient of the message hash. Verification completes the chain: <code>chain(sig[i], a[i], 2^w&minus;1&minus;a[i])</code> must recover <code>pk[i]</code>.</p>
     <div class="chain-primer">
       <p class="chain-primer-caption">A hash chain is a one-way street. Repeatedly hashing turns a secret <code>sk</code> into a public <code>pk</code> over 2<sup>w</sup>=16 steps. You can always walk <em>forward</em> (hash again), but never <em>backward</em>. Signing publishes one node partway along (here, step&nbsp;9); the verifier hashes it forward to <code>pk</code>, while everything below stays secret:</p>
       ${renderChainDiagram([{ i: 0, a1: 9 }], 'sign')}
       ${chainLegend('sign')}
     </div>
-    <p><strong>LMS</strong> organizes 2^h W-OTS+ keypairs into a Merkle tree. The root is the LMS public key. An LMS signature includes the OTS signature for the chosen leaf plus an auth path (h sibling hashes) to reconstruct the root. Each leaf is used exactly once.</p>
+    <p><strong>LMS</strong> organizes 2^h LM-OTS keypairs into a Merkle tree. The root is the LMS public key. An LMS signature includes the OTS signature for the chosen leaf plus an auth path (h sibling hashes) to reconstruct the root. Each leaf is used exactly once.</p>
     <div class="info-box"><strong>Parameters in this demo:</strong> LMS-SHA256-M32-H5 + LMOTS-SHA256-N32-W4 per NIST SP 800-208 &mdash; 32 bytes (SHA-256), tree height h=5, Winternitz w=4, p=67 chain elements per OTS key. The tree supports <strong>32 one-time signatures</strong>.</div>
   </div>
   <div class="card">
@@ -218,7 +218,7 @@ function renderApp(): string {
         <caption class="sr-only">Comparison of LMS, SPHINCS+, and Ed25519 signature schemes</caption>
         <thead><tr><th scope="col">Property</th><th scope="col">LMS (h=10)</th><th scope="col">SPHINCS+-128s</th><th scope="col">Ed25519</th></tr></thead>
         <tbody>
-          <tr><td>Public key</td><td>64 bytes</td><td>32 bytes</td><td>32 bytes</td></tr>
+          <tr><td>Public key</td><td>56 bytes</td><td>32 bytes</td><td>32 bytes</td></tr>
           <tr><td>Signature</td><td>~1.6 KB</td><td>~8 KB</td><td>64 bytes</td></tr>
           <tr><td>Signing speed</td><td>Fast</td><td>Slow</td><td>Very fast</td></tr>
           <tr><td>Verification speed</td><td>Fast</td><td>Fast</td><td>Very fast</td></tr>
@@ -308,7 +308,7 @@ function renderApp(): string {
   </div>
   <div class="card">
     <h3>C1 &mdash; What happens when you reuse a leaf</h3>
-    <p>W-OTS+ security depends on the signer never revealing more than one signature per leaf. Per RFC 8554 &sect;4.5: <code>sig[i] = chain(x[i], 0, a[i])</code> &mdash; the signature element at position <em>i</em> is the chain value at step <code>a[i]</code>, where <code>a</code> depends on the message and a per-signature randomizer <code>C</code>.</p>
+    <p>LM-OTS security depends on the signer never revealing more than one signature per leaf. Per RFC 8554 &sect;4.5: <code>sig[i] = chain(x[i], 0, a[i])</code> &mdash; the signature element at position <em>i</em> is the chain value at step <code>a[i]</code>, where <code>a</code> depends on the message and a per-signature randomizer <code>C</code>.</p>
     <p>Each reuse of leaf <code>q</code> leaks another set of chain values. Because a chain value can be advanced <em>forward</em> but never reversed, after <em>k</em> reuses the attacker holds each position at its <strong>lowest</strong> revealed depth <code>floor[i] = min</code> over the <em>k</em> signatures. To forge a chosen message the attacker grinds the randomizer <code>C</code> until every target digit <code>at[i] &ge; floor[i]</code>, then advances each held value forward to <code>at[i]</code>.</p>
     <div class="danger-box"><strong>&#128308; Reuse compromises the whole tree.</strong> With this teaching parameter set (w=4, 67 chains) two reuses rarely suffice, but the floors drop fast: around <strong>eight</strong> reuses make forging an arbitrary message reliable, and every extra reuse makes it easier. A real deployment reuses a leaf zero times &mdash; one rollback or clone is already a standing invitation.</div>
   </div>
@@ -364,7 +364,7 @@ function renderApp(): string {
 <section class="section" id="section-d">
   <div class="section-header">
     <span class="section-tag">D</span>
-    <h2>HSS &mdash; Hierarchical Signature Scheme</h2>
+    <h2>HSS &mdash; Hierarchical Signature System</h2>
   </div>
   <div class="card">
     <h3>D1 &mdash; Scaling beyond 2^h signatures</h3>
@@ -381,7 +381,7 @@ function renderApp(): string {
         </tbody>
       </table>
     </div>
-    <p>The challenge: generating all 2^h W-OTS+ keypairs upfront (for h=20: 1 million computations). HSS solves this with a multi-level tree hierarchy so only the current leaf tree needs to be precomputed.</p>
+    <p>The challenge: generating all 2^h LM-OTS keypairs upfront (for h=20: 1 million computations). HSS solves this with a multi-level tree hierarchy so only the current leaf tree needs to be precomputed.</p>
   </div>
   <div class="card">
     <h3>D2 &mdash; HSS structure (NIST SP 800-208 &sect;6)</h3>

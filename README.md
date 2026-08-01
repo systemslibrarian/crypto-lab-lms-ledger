@@ -2,7 +2,7 @@
 
 ## What It Is
 
-crypto-lab-lms-ledger implements the Leighton-Micali Signature scheme (LMS) and its hierarchical variant (HSS) as specified in NIST SP 800-208 and RFC 8554. LMS is a stateful hash-based signature scheme built on LM-OTS (Winternitz) one-time signatures organized into a Merkle tree. Each leaf in the tree is a one-time keypair — reusing a leaf leaks chain values at multiple depths, and after enough reuses an attacker can forge signatures under the same public key. The state (which leaf to use next) must be maintained persistently and protected against rollback. The security model assumes only the collision resistance of SHA-256 — no number-theoretic hardness assumptions — making LMS post-quantum secure by design.
+crypto-lab-lms-ledger implements the Leighton-Micali Signature scheme (LMS) and its hierarchical variant (HSS) as specified in NIST SP 800-208 and RFC 8554. LMS is a stateful hash-based signature scheme built on LM-OTS (Winternitz) one-time signatures organized into a Merkle tree. Each leaf in the tree is a one-time keypair — reusing a leaf leaks chain values at multiple depths, and after enough reuses an attacker can forge signatures under the same public key. The state (which leaf to use next) must be maintained persistently and protected against rollback. The security model assumes only the second-preimage resistance of SHA-256 (RFC 8554 §9; the per-signature randomizer `C` is what removes the need for full collision resistance) — no number-theoretic hardness assumptions — making LMS post-quantum secure by design.
 
 The LMS/HSS here is a real implementation, not a mock: signing and verification run the RFC 8554 hash-chain, Winternitz checksum, Merkle node numbering, and per-signature randomizer `C`. The LM-OTS core is validated byte-for-byte against **RFC 8554 Appendix F Test Case 1** (`test/rfc8554-vectors.test.ts`), and the HSS demo performs genuine two-level signing with a real root-tree roll-over when a leaf tree fills — every signature is verified end to end.
 
@@ -56,5 +56,7 @@ npm run dev
 - [crypto-lab-falcon-seal](https://systemslibrarian.github.io/crypto-lab-falcon-seal/) — NTRU lattice signatures.
 
 ---
+
+*One of 170+ browser demos in the [Crypto Lab](https://crypto-lab.systemslibrarian.dev/) suite.*
 
 *"So whether you eat or drink or whatever you do, do it all for the glory of God." — 1 Corinthians 10:31*
