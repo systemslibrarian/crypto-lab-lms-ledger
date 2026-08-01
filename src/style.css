@@ -16,6 +16,14 @@
   --accent:             #3ddc84;
   --accent-hover:       #56e897;
   --border:             #1f2d24;
+  /* Control boundaries only (WCAG 2.1 SC 1.4.11). Textareas and text inputs
+     are filled with --code-bg (#0d1410), which is 1.09:1 against --bg and
+     1.35:1 against --surface, so the border is the only thing delineating the
+     field. #5f6f64 stays on the lab's green-black axis and clears 3:1 on every
+     surface a control sits on: 3.66:1 on --bg, 3.45:1 on --surface, 3.22:1 on
+     --surface-alt. --border is left unchanged for decorative rules — panel
+     outlines, table rules, dividers, the HSS diagram. */
+  --border-strong:      #5f6f64;
   --code-bg:            #0d1410;
   --key-available:      #2a4a30;
   --key-available-text: #5ccc6e;
@@ -49,6 +57,9 @@
   --accent:             #136030;
   --accent-hover:       #0d4a24;
   --border:             #c0d8c0;
+  /* Same fix, other direction, on the same green axis: 3.34:1 on --bg,
+     3.71:1 on --surface, 3.17:1 on --surface-alt. */
+  --border-strong:      #768a76;
   --code-bg:            #e4ede4;
   --key-available:      #d0f0d0;
   --key-available-text: #1a6a1a;
@@ -310,7 +321,7 @@ textarea, input[type="text"] {
   font-size: 0.84rem;
   background: var(--code-bg);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 4px;
   padding: 0.6rem 0.75rem;
   width: 100%;
