@@ -212,14 +212,14 @@ function renderApp(): string {
   </div>
   <div class="card">
     <h3>A3 &mdash; Why stateful schemes exist</h3>
-    <p>Stateless schemes like SPHINCS+ (FIPS 205) avoid state but pay in signature size (~8 KB for SPHINCS+-SHA-256-128s). LMS signatures (~1.6 KB at h=10) are 5&times; smaller &mdash; decisive when signatures must fit in firmware manifest headers or be transmitted over constrained IoT channels. Verification requires only hash operations (no field arithmetic).</p>
+    <p>Stateless schemes like SPHINCS+ (FIPS 205) avoid state but pay in signature size (~8 KB for SPHINCS+-SHA-256-128s). LMS signature size depends on the Winternitz parameter <em>w</em>, so it is only meaningful once <em>w</em> is named: at h=10 an RFC 8554 signature is <strong>1,452 bytes</strong> with LMOTS-SHA256-N32-W8 (p=34), and <strong>2,508 bytes</strong> with the W4 set (p=67) this demo signs with. Against SPHINCS+-128s that is roughly 5&times; smaller at w=8 and 3&times; smaller at w=4 &mdash; decisive when signatures must fit in firmware manifest headers or be transmitted over constrained IoT channels. Verification requires only hash operations (no field arithmetic).</p>
     <div class="table-wrap">
       <table>
         <caption class="sr-only">Comparison of LMS, SPHINCS+, and Ed25519 signature schemes</caption>
-        <thead><tr><th scope="col">Property</th><th scope="col">LMS (h=10)</th><th scope="col">SPHINCS+-128s</th><th scope="col">Ed25519</th></tr></thead>
+        <thead><tr><th scope="col">Property</th><th scope="col">LMS (h=10, w=8)</th><th scope="col">SPHINCS+-128s</th><th scope="col">Ed25519</th></tr></thead>
         <tbody>
           <tr><td>Public key</td><td>56 bytes</td><td>32 bytes</td><td>32 bytes</td></tr>
-          <tr><td>Signature</td><td>~1.6 KB</td><td>~8 KB</td><td>64 bytes</td></tr>
+          <tr><td>Signature</td><td>1,452 B (2,508 B at w=4)</td><td>7,856 B</td><td>64 bytes</td></tr>
           <tr><td>Signing speed</td><td>Fast</td><td>Slow</td><td>Very fast</td></tr>
           <tr><td>Verification speed</td><td>Fast</td><td>Fast</td><td>Very fast</td></tr>
           <tr><td>State required</td><td><span class="text-warning">Yes</span></td><td><span class="text-accent">No</span></td><td><span class="text-accent">No</span></td></tr>
@@ -357,7 +357,7 @@ function renderApp(): string {
       <li>A backup restore overwrites the state file with an older version</li>
       <li>Two servers are cloned from the same image and sign concurrently</li>
     </ul>
-    <p>NIST SP 800-208 Section 5 requires implementations to <em>"protect against state reuse at all costs"</em> and recommends hardware security modules with monotonic counters that cannot be decremented. The TPM 2.0 specification includes NV counters specifically designed for this purpose &mdash; they can only increment, making rollback physically impossible.</p>
+    <p>NIST SP 800-208 &sect;9.1 (Security Considerations &mdash; One-Time Signature Key Reuse) states that extreme care is needed to avoid accidental OTS key reuse: the private key's state must be updated each time a signature is generated, and where the key lives in non-volatile memory that update must be committed to mark the OTS key unavailable <em>before</em> the signature generated with it is exported. The normative conformance requirements sit in &sect;8.1. On hardware, SP 800-208 notes that some cryptographic modules implement monotonic counters and that using one to choose the OTS key may be very helpful in avoiding unintentional reuse. The TPM 2.0 specification provides NV counters of this kind &mdash; they only increment, so a counter-backed index cannot be rolled back in place.</p>
   </div>
 </section>
 
@@ -437,7 +437,7 @@ function renderApp(): string {
       <li>Firmware updates are infrequent (h=20 supports over 1 million updates)</li>
       <li>State management is straightforward when an HSM with a hardware counter handles it</li>
       <li>Verification requires only hash operations &mdash; no field arithmetic</li>
-      <li>Signature size (~1.6 KB at h=10) is acceptable in firmware manifest headers</li>
+      <li>Signature size (1,452 bytes at h=10 with LMOTS w=8, or 2,508 bytes at w=4) is acceptable in firmware manifest headers</li>
     </ul>
     <p>Contexts where hash-based signatures are being evaluated or deployed: UEFI Secure Boot (next-generation post-quantum transition), IoT firmware over-the-air updates, automotive ECU firmware signing (ISO/SAE 21434), and avionics software loading in DO-178C compliant systems.</p>
   </div>
@@ -450,7 +450,7 @@ function renderApp(): string {
         <tbody>
           <tr><td>Standard</td><td>SP 800-208</td><td>SP 800-208</td><td>FIPS 205</td></tr>
           <tr><td>Stateful</td><td><span class="text-warning">Yes</span></td><td><span class="text-warning">Yes</span></td><td><span class="text-accent">No</span></td></tr>
-          <tr><td>Signature size</td><td>~1.6 KB (h=10)</td><td>~2.5 KB (h=10)</td><td>~8 KB (128s)</td></tr>
+          <tr><td>Signature size</td><td>1,452 B (h=10, w=8)<br>2,508 B (h=10, w=4)</td><td>2,500 B (h=10, w=16)</td><td>7,856 B (128s)</td></tr>
           <tr><td>Key generation</td><td>Fast</td><td>Faster</td><td>Very fast</td></tr>
           <tr><td>Security assumption</td><td>Hash functions</td><td>Hash functions</td><td>Hash functions</td></tr>
           <tr><td>CNSA 2.0 approved</td><td><span class="text-accent">Yes</span></td><td><span class="text-accent">Yes</span></td><td><span class="text-muted">Different use case</span></td></tr>
