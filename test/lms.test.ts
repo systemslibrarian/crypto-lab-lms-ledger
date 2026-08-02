@@ -22,6 +22,9 @@ import {
   W,
   P,
   otsChainCount,
+  signatureSizeBytes,
+  rfcLmsSignatureSizeBytes,
+  rfcTwoLevelHssSignatureSizeBytes,
 } from '../src/lms.ts';
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -32,6 +35,13 @@ describe('parameter sizing', () => {
     expect(otsChainCount(4)).toBe(67);
     expect(otsChainCount(8)).toBe(34);
     expect(P).toBe(67);
+  });
+
+  it('includes the verifier-required randomizer and RFC framing in advertised sizes', () => {
+    expect(signatureSizeBytes(4, 5)).toBe(2336);
+    expect(rfcLmsSignatureSizeBytes(8, 10)).toBe(1452);
+    expect(2 * rfcLmsSignatureSizeBytes(8, 10)).toBe(2904);
+    expect(rfcTwoLevelHssSignatureSizeBytes(8, 10)).toBe(2964);
   });
 });
 

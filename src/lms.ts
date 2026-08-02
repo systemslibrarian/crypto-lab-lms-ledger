@@ -384,6 +384,21 @@ export function signatureSizeBytes(w: number = W, h: number = H): number {
   return otsChainCount(w) * N + N /* C */ + h * N;
 }
 
+/** RFC 8554 serialized LMS signature: q, LM-OTS type, C + y, LMS type, path. */
+export function rfcLmsSignatureSizeBytes(w: number = W, h: number = H): number {
+  return 12 + signatureSizeBytes(w, h);
+}
+
+/** RFC 8554 LMS public key: LMS type, LM-OTS type, 16-byte I, and n-byte root. */
+export function rfcLmsPublicKeySizeBytes(): number {
+  return 24 + N;
+}
+
+/** RFC 8554 two-level HSS signature with identical LMS/LM-OTS parameters. */
+export function rfcTwoLevelHssSignatureSizeBytes(w: number = W, h: number = H): number {
+  return 4 /* Nspk */ + 2 * rfcLmsSignatureSizeBytes(w, h) + rfcLmsPublicKeySizeBytes();
+}
+
 // ============================================================
 // Reuse forgery (Section C) — a real LM-OTS grinding attack
 // ============================================================

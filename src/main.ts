@@ -19,6 +19,9 @@ import {
   P,
   N,
   W,
+  signatureSizeBytes,
+  rfcLmsSignatureSizeBytes,
+  rfcTwoLevelHssSignatureSizeBytes,
 } from './lms';
 import type { LmsTree, LmsSignature, HssPrivateKey, HssPublicKey } from './lms';
 
@@ -48,6 +51,9 @@ const HSS_LEAF_H = 3;
 const HSS_L1 = 1 << HSS_ROOT_H; // 8
 const HSS_L2 = 1 << HSS_LEAF_H; // 8
 const HSS_CAP = HSS_L1 * HSS_L2; // 64
+const RFC_LMS_W8_H10_SIG_BYTES = rfcLmsSignatureSizeBytes(8, 10);
+const TWO_LEVEL_W8_H10_SIG_BYTES = 2 * RFC_LMS_W8_H10_SIG_BYTES;
+const RFC_HSS_W8_H10_SIG_BYTES = rfcTwoLevelHssSignatureSizeBytes(8, 10);
 let hssPriv: HssPrivateKey | null = null;
 let hssPub: HssPublicKey | null = null;
 let hssTotalUsed = 0;
@@ -416,7 +422,7 @@ function renderApp(): string {
       <li>HSS signature = (Level 1 LMS-sig on Level 2 PK) &#x2016; (Level 2 LMS-sig on message).</li>
       <li>Verification: verify Level 1 sig on Level 2 PK using Level 1 root, then verify Level 2 sig on message using Level 2 PK.</li>
     </ol>
-    <div class="info-box"><strong>Example capacity:</strong> HSS with L=2, h1=10, h2=10 supports 2^10 &times; 2^10 = <strong>1,048,576 signatures</strong> &mdash; sufficient for the entire firmware update lifetime of most deployed devices. Signature size &asymp; 2 &times; LMS-sig = ~3.4 KB at h=10.</div>
+    <div class="info-box" id="hss-size-example"><strong>Example capacity:</strong> HSS with L=2, h1=10, h2=10 supports 2^10 &times; 2^10 = <strong>1,048,576 signatures</strong> &mdash; sufficient for the entire firmware update lifetime of most deployed devices. Its two h=10, w=8 LMS signature components total ${TWO_LEVEL_W8_H10_SIG_BYTES.toLocaleString()} bytes (~${(TWO_LEVEL_W8_H10_SIG_BYTES / 1000).toFixed(1)} KB). With the hierarchy count and signed Level 2 public key, the RFC 8554 HSS signature is ${RFC_HSS_W8_H10_SIG_BYTES.toLocaleString()} bytes (~${(RFC_HSS_W8_H10_SIG_BYTES / 1000).toFixed(1)} KB).</div>
   </div>
 </section>
 
@@ -561,14 +567,20 @@ function renderSignWalkthrough(coefs: number[]): string {
 
 function showSignResult(sig: LmsSignature, message: Uint8Array, coefs: number[]) {
   const msgText = new TextDecoder().decode(message);
-  const allSigBytes = sig.otsSignature.reduce((a, b) => a + b.length, 0) + sig.authPath.reduce((a, b) => a + b.length, 0);
+  const allSigBytes =
+    sig.C.length +
+    sig.otsSignature.reduce((sum, part) => sum + part.length, 0) +
+    sig.authPath.reduce((sum, part) => sum + part.length, 0);
+  if (allSigBytes !== signatureSizeBytes(tree!.w, tree!.height)) {
+    throw new Error('Signature material does not match the active LMS parameters');
+  }
   el('sign-walkthrough').innerHTML = renderSignWalkthrough(coefs);
   const content = el('sign-result-content');
   content.innerHTML = `
     <div class="result-row"><span class="result-key">Status</span><span class="result-value"><span class="badge badge-valid">&#10003; SIGNATURE PRODUCED</span></span></div>
     <div class="result-row"><span class="result-key">Leaf index</span><span class="result-value accent">${sig.leafIndex}</span></div>
     <div class="result-row"><span class="result-key">Message</span><span class="result-value">${escapeHtml(msgText.slice(0, 80))}${msgText.length > 80 ? '\u2026' : ''}</span></div>
-    <div class="result-row"><span class="result-key">Sig size</span><span class="result-value">${allSigBytes} bytes (${P}\u00d7${N} OTS + ${H}\u00d7${N} auth path)</span></div>
+    <div class="result-row" id="live-signature-size"><span class="result-key">Sig material</span><span class="result-value">${allSigBytes} bytes (${sig.C.length}-byte C randomizer + ${sig.otsSignature.length}\u00d7${N} OTS + ${sig.authPath.length}\u00d7${N} auth path)</span></div>
     <div class="result-row"><span class="result-key">Root</span><span class="result-value accent">${toHex(tree!.root.slice(0, 16))}\u2026</span></div>
   `;
   el('sign-result').classList.remove('hidden');
