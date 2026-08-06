@@ -53,7 +53,7 @@
   --surface-alt:        #e8efe8;
   --surface-hover:      #ddeadd;
   --text:               #1a2e1a;
-  --text-muted:         #4a6a4a;
+  --text-muted:         #334c33;
   --accent:             #136030;
   --accent-hover:       #0d4a24;
   --border:             #c0d8c0;
@@ -159,7 +159,7 @@ pre code {
 .cl-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:clamp(1rem,4vw,3rem);flex-wrap:wrap;margin:clamp(1rem,3vw,2rem) 0 1.5rem;}
 .cl-hero-main{flex:1 1 22rem;min-width:min(100%,20rem);}
 .cl-hero-title{margin:0;font-size:clamp(1.6rem,3.8vw,2.7rem);font-weight:700;line-height:1.1;letter-spacing:.01em;color:var(--accent);}
-.cl-hero-sub{margin:.4rem 0 0;font-size:clamp(.9rem,1.6vw,1.05rem);letter-spacing:.01em;opacity:.85;color:var(--text-muted);}
+.cl-hero-sub{margin:.4rem 0 0;font-size:clamp(.9rem,1.6vw,1.05rem);letter-spacing:.01em;color:var(--text-muted);}
 .cl-hero-desc{margin:.55rem 0 0;font-size:1rem;line-height:1.5;color:var(--text-muted);max-width:60ch;}
 .cl-hero-why{flex:0 1 min(40%,26rem);min-width:min(100%,15rem);border:1px solid var(--border);border-radius:10px;padding:.85rem 1.05rem;background:color-mix(in oklab,var(--accent) 6%,transparent);}
 .cl-hero-why-label{display:block;font-size:.68rem;font-weight:700;letter-spacing:.14em;color:var(--accent);}
