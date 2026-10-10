@@ -2,11 +2,30 @@
 
 ## What It Is
 
-crypto-lab-lms-ledger implements the Leighton-Micali Signature scheme (LMS) and its hierarchical variant (HSS) as specified in NIST SP 800-208 and RFC 8554. LMS is a stateful hash-based signature scheme built on LM-OTS (Winternitz) one-time signatures organized into a Merkle tree. Each leaf in the tree is a one-time keypair — reusing a leaf leaks chain values at multiple depths, and after enough reuses an attacker can forge signatures under the same public key. The state (which leaf to use next) must be maintained persistently and protected against rollback. The security model assumes only the second-preimage resistance of SHA-256 (RFC 8554 §9; the per-signature randomizer `C` is what removes the need for full collision resistance) — no number-theoretic hardness assumptions — making LMS post-quantum secure by design.
+crypto-lab-lms-ledger teaches the Leighton-Micali Signature scheme (LMS) and its hierarchical variant (HSS), documented in NIST SP 800-208 and RFC 8554, using real hash-chain and Merkle operations with the HSS adaptations described below. LMS is a stateful hash-based signature scheme built on LM-OTS (Winternitz) one-time signatures organized into a Merkle tree. Each leaf in the tree is a one-time keypair — reusing a leaf leaks chain values at multiple depths, and after enough reuses an attacker can forge signatures under the same public key. The state (which leaf to use next) must be maintained persistently and protected against rollback. The security model assumes only the second-preimage resistance of SHA-256 (RFC 8554 §9; the per-signature randomizer `C` is what removes the need for full collision resistance) — no number-theoretic hardness assumptions — making LMS post-quantum secure by design.
 
-The LMS/HSS here is a real implementation, not a mock: signing and verification run the RFC 8554 hash-chain, Winternitz checksum, Merkle node numbering, and per-signature randomizer `C`. The LM-OTS core is validated byte-for-byte against **RFC 8554 Appendix F Test Case 1** (`test/rfc8554-vectors.test.ts`), and the HSS demo performs genuine two-level signing with a real root-tree roll-over when a leaf tree fills — every signature is verified end to end.
+The LMS/HSS here is a real implementation, not a mock: signing and verification run the RFC 8554 hash-chain, Winternitz checksum, Merkle node numbering, and per-signature randomizer `C`. The LM-OTS core is validated byte-for-byte against **RFC 8554 Appendix F Test Case 1** (`test/rfc8554-vectors.test.ts`), and the HSS demo computes two-level signing and actual child-tree rollover — each signature is checked against the lab's own custom transcript. That is not a full RFC/NIST conformance or interoperability result.
 
 Implementation: Vite + TypeScript, vanilla CSS, no runtime npm packages (crypto via `crypto.subtle`). Interactive parameters: LMS-SHA256-M32-H5 + LMOTS-SHA256-N32-W4 (n=32 bytes, h=5 tree height, w=4 Winternitz, p=67 chain elements). The interactive HSS demo (Section D) runs a live two-level instance sized h1=3, h2=3 (8 × 8 = 64 signatures) so roll-over and exhaustion are observable in seconds; production deployments size h1/h2 for the device lifetime (see below).
+
+## HSS teaching adaptation and verification scope
+
+The root signs a **60-byte custom child-key message**: the tree-slot index,
+16-byte identifier, 32-byte root and raw four-byte height/Winternitz values.
+RFC 8554 sections 5.3 and 6 instead sign the **56-byte serialized LMS child
+public key**: LMS typecode, LM-OTS typecode, identifier and root. This lab retains
+its custom transcript even when h=5 and w=4; it does not export interoperable HSS
+wire formats. The interactive h1=h2=3 trees are also outside the RFC's parameter
+sets. Both are **non-interoperable teaching adaptations**, not NIST conformance.
+
+Real hashing, message signing, altered-message rejection and rollover are
+implemented. `test/hss-transcript-scope.test.ts` independently verifies that the
+root signature accepts the custom transcript and rejects RFC framing at supported
+h=5/w=4. The Appendix F known-answer test validates LM-OTS recovery only; it does
+not validate the complete hierarchy, serialization or persistent-state safety.
+Use a conforming, audited implementation for deployment; this in-memory teaching
+state is not a production signing service. Primary reference:
+[RFC 8554 sections 5.3 and 6](https://www.rfc-editor.org/rfc/rfc8554.html#section-5.3).
 
 ## When to Use It
 

@@ -42,7 +42,8 @@ const LEAF_COUNT = 1 << H;
 const WOTS_STEPS = 1 << W; // 16 hash-chain steps (0..15); step 15 is the public key
 const CHAINS_SHOWN = 8;    // how many of the p=67 chains to visualize at once
 
-// HSS interactive demo state (Section D) — a REAL two-level HSS instance.
+// HSS interactive demo state (Section D): real two-level signing mechanics,
+// with a custom child-key transcript and non-RFC reduced heights.
 // Root tree h1=3 (8 leaf-tree slots), leaf trees h2=3 (8 signatures each) ->
 // 8 x 8 = 64 total signatures. Every "Sign" here performs genuine LMS signing
 // on the active leaf tree; a full leaf tree triggers a real root-tree roll-over.
@@ -391,6 +392,16 @@ function renderApp(): string {
   </div>
   <div class="card">
     <h3>D2 &mdash; HSS structure (NIST SP 800-208 &sect;6)</h3>
+    <div class="warn-box" id="hss-transcript-scope">
+      <strong>Demo scope: non-interoperable teaching adaptation.</strong>
+      The hash chains, Merkle paths, signing and verification below are real, but
+      h1=h2=3 is not an RFC parameter set. The root signs a 60-byte custom child-key message:
+      the tree-slot index, identifier I, root hash and raw h/w values.
+      RFC 8554 &sect;5.3 and &sect;6 instead sign a 56-byte child public key with
+      LMS and LM-OTS typecodes, I and the root hash. This lab retains the custom
+      transcript even at supported heights; it does not export interoperable HSS wire formats
+      or establish NIST conformance. The LM-OTS Appendix F test validates that core only.
+    </div>
     <p>An HSS instance with L=2 levels:</p>
     <ul style="margin:0.5rem 0 0.85rem 1.5rem;line-height:2;font-size:0.88rem;">
       <li><strong>Level 1 (top tree):</strong> signs the public keys of Level 2 trees. Height h1 &rarr; 2^h1 Level 2 trees available.</li>
@@ -419,7 +430,7 @@ function renderApp(): string {
     <ol style="margin:0.5rem 0 0.85rem 1.5rem;line-height:2.2;font-size:0.88rem;">
       <li>Use the current Level 2 tree to sign the message (normal LMS signing).</li>
       <li>When the Level 2 tree is exhausted, use the Level 1 tree to sign the new Level 2 tree's public key. This happens once per Level 2 tree.</li>
-      <li>HSS signature = (Level 1 LMS-sig on Level 2 PK) &#x2016; (Level 2 LMS-sig on message).</li>
+      <li>RFC HSS wire signature includes the hierarchy count, each parent LMS signature and serialized child public key, then the message's LMS signature. This demo keeps an in-memory object using the custom transcript disclosed above.</li>
       <li>Verification: verify Level 1 sig on Level 2 PK using Level 1 root, then verify Level 2 sig on message using Level 2 PK.</li>
     </ol>
     <div class="info-box" id="hss-size-example"><strong>Example capacity:</strong> HSS with L=2, h1=10, h2=10 supports 2^10 &times; 2^10 = <strong>1,048,576 signatures</strong> &mdash; sufficient for the entire firmware update lifetime of most deployed devices. Its two h=10, w=8 LMS signature components total ${TWO_LEVEL_W8_H10_SIG_BYTES.toLocaleString()} bytes (~${(TWO_LEVEL_W8_H10_SIG_BYTES / 1000).toFixed(1)} KB). With the hierarchy count and signed Level 2 public key, the RFC 8554 HSS signature is ${RFC_HSS_W8_H10_SIG_BYTES.toLocaleString()} bytes (~${(RFC_HSS_W8_H10_SIG_BYTES / 1000).toFixed(1)} KB).</div>
