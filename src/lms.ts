@@ -1,8 +1,9 @@
 /**
  * LMS + HSS Implementation — NIST SP 800-208 / RFC 8554
  *
- * This is a byte-faithful implementation of the Leighton-Micali Signature
- * scheme and its Hierarchical variant (HSS). The LM-OTS core is validated
+ * The hash-chain and Merkle operations are real. HSS uses a custom signed-key
+ * transcript and reduced demo heights, not an interoperable RFC wire format.
+ * The LM-OTS core is validated
  * against RFC 8554 Appendix F Test Case 1 (see test/rfc8554-vectors.test.ts).
  *
  * Demo parameter set:
@@ -11,7 +12,8 @@
  *
  * The LM-OTS routines are parameterized by w so the exact same code path can
  * be exercised at w = 8 (p = 34, ls = 0) — the parameter set used by RFC 8554's
- * published test vectors — proving byte-level interoperability.
+ * published test vectors — validating that LM-OTS recovery path, not full HSS
+ * serialization, NIST conformance or deployment-state safety.
  *
  * All SHA-256 calls go through the Web Crypto API.
  */
@@ -537,7 +539,12 @@ export interface HssSignature {
   leafSig: LmsSignature;     // signature over the actual message
 }
 
-/** Encode a leaf tree's LMS public key as the message the root tree signs. */
+/**
+ * Custom teaching transcript, NOT RFC 8554 §5.3 serialization. Even with
+ * h=5/w=4, this signs 60 bytes (tree slot || I || root || raw h || raw w),
+ * rather than the RFC's 56-byte LMS type || LM-OTS type || I || root.
+ * The default h=3 hierarchy is also outside the RFC's defined parameter sets.
+ */
 function encodeLeafPubKey(levelUsed: number, id: Uint8Array, root: Uint8Array, h: number, w: number): Uint8Array {
   return concat(u32be(levelUsed), id, root, u32be(h), u32be(w));
 }
