@@ -758,3 +758,5 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible, input:focu
   white-space: nowrap;
   border: 0;
 }
+
+#hash-research-note a { text-decoration: underline; text-underline-offset: .15em; }

@@ -215,7 +215,7 @@ function renderApp(): string {
       <li><strong>Monotonically increasing</strong> &mdash; rollback to a previous index is catastrophic</li>
     </ul>
     <p>An HSM or TPM with a hardware counter is the typical deployment. Software-only implementations must protect the state file from corruption, rollback, and concurrent writes using atomic operations or database transactions.</p>
-    <div class="warn-box"><strong>\u26a0 State is the entire security contract.</strong> A state rollback that replays <code>nextIndex</code> has the same effect as intentional key reuse &mdash; see Section C for a live demonstration.</div>
+    <div class="warn-box"><strong>\u26a0 State is a necessary security requirement.</strong> A state rollback that replays <code>nextIndex</code> has the same effect as intentional key reuse &mdash; see Section C for a live demonstration.</div>
   </div>
   <div class="card">
     <h3>A3 &mdash; Why stateful schemes exist</h3>
@@ -448,6 +448,12 @@ function renderApp(): string {
     <div class="info-box">The CNSA 2.0 guidance applies to National Security Systems (NSS) and contractors in the U.S. defense industrial base.</div>
   </div>
   <div class="card">
+<aside id="hash-research-note" role="note">
+  <h3>Hash construction and aggregate use: research note (26 October 2026)</h3>
+  <p>Reliable state is necessary, but does not by itself establish security. Select the exact hash variant and parameter set; account for message length and format, aggregate signature counts across keys, and the resulting hash-block and hash-call budgets. Correct randomizers, domain separation and implementation also matter.</p>
+  <p><a href="https://eprint.iacr.org/2026/2624">Guo, Cheng, Preneel and Wang, <em>Provable Security of SHA-256-Based LMS Revisited in the Ideal-Cipher Model</em></a> studies classical ideal-cipher-model bounds. <a href="https://eprint.iacr.org/2026/2635">Strenzke, <em>A Kelsey–Kohno Attack Variant against SHA-2 Message Digests in HSS/LMS and XMSS</em></a> studies attacks pooling signatures across keys, with very large data and computation and attacker-compatible message formats. Its attacks exclude SHAKE256 parameter sets; this is not a blanket security proof for SHAKE256.</p>
+  <p>These are theoretical, attack-model-conditional preprints, not a practical break or evidence of standards withdrawal. Their classical analyses do not establish a quantum security bound. They are separate from the live leaf-reuse forgery demonstrated here.</p>
+</aside>
     <h3>E2 &mdash; Secure boot and firmware signing</h3>
     <p>LMS is well-suited for firmware signing because:</p>
     <ul style="margin:0.5rem 0 0.85rem 1.5rem;line-height:2;font-size:0.88rem;">
