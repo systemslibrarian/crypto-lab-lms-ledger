@@ -2,7 +2,7 @@
 
 ## What It Is
 
-crypto-lab-lms-ledger teaches the Leighton-Micali Signature scheme (LMS) and its hierarchical variant (HSS), documented in NIST SP 800-208 and RFC 8554, using real hash-chain and Merkle operations with the HSS adaptations described below. LMS is a stateful hash-based signature scheme built on LM-OTS (Winternitz) one-time signatures organized into a Merkle tree. Each leaf in the tree is a one-time keypair — reusing a leaf leaks chain values at multiple depths, and after enough reuses an attacker can forge signatures under the same public key. The state (which leaf to use next) must be maintained persistently and protected against rollback. The security model assumes only the second-preimage resistance of SHA-256 (RFC 8554 §9; the per-signature randomizer `C` is what removes the need for full collision resistance) — no number-theoretic hardness assumptions — making LMS post-quantum secure by design.
+crypto-lab-lms-ledger teaches the Leighton-Micali Signature scheme (LMS) and its hierarchical variant (HSS), documented in NIST SP 800-208 and RFC 8554, using real hash-chain and Merkle operations with the HSS adaptations described below. LMS is a stateful hash-based signature scheme built on LM-OTS (Winternitz) one-time signatures organized into a Merkle tree. Each leaf in the tree is a one-time keypair — reusing a leaf leaks chain values at multiple depths, and after enough reuses an attacker can forge signatures under the same public key. The state (which leaf to use next) must be maintained persistently and protected against rollback. LMS avoids number-theoretic hardness assumptions and is designed for post-quantum use. RFC 8554 §9 explains the role of the per-signature randomizer `C`; this does not make second-preimage resistance alone a complete concrete security argument for every hash construction, message distribution or aggregate-use budget. See the research qualifications below.
 
 The LMS/HSS here is a real implementation, not a mock: signing and verification run the RFC 8554 hash-chain, Winternitz checksum, Merkle node numbering, and per-signature randomizer `C`. The LM-OTS core is validated byte-for-byte against **RFC 8554 Appendix F Test Case 1** (`test/rfc8554-vectors.test.ts`), and the HSS demo computes two-level signing and actual child-tree rollover — each signature is checked against the lab's own custom transcript. That is not a full RFC/NIST conformance or interoperability result.
 
@@ -79,3 +79,12 @@ npm run dev
 *Part of the [Crypto Lab](https://crypto-lab.systemslibrarian.dev/) suite.*
 
 *"So whether you eat or drink or whatever you do, do it all for the glory of God." — 1 Corinthians 10:31*
+
+## Hash construction and aggregate-use research
+
+Reliable state is necessary but not sufficient. Deployment choices must identify the exact hash variant and parameter set, message length and accepted format, aggregate signature counts across keys, and the resulting hash-block/hash-call budgets, alongside randomizer generation, domain separation and implementation quality.
+
+- Guo, Cheng, Preneel and Wang, *Provable Security of SHA-256-Based LMS Revisited in the Ideal-Cipher Model*, [ePrint 2026/2624](https://eprint.iacr.org/2026/2624), sections 1.1–1.2: classical ideal-cipher-model bounds depend on aggregate internal-block and hash-call work.
+- Strenzke, *A Kelsey–Kohno Attack Variant against SHA-2 Message Digests in HSS/LMS and XMSS*, [ePrint 2026/2635](https://eprint.iacr.org/2026/2635), sections 1.5 and 4: multi-key pooling, message length/format and extremely large resource budgets matter. These attacks exclude SHAKE256 parameter sets; that exclusion is not a general security proof.
+
+These October 2026 preprints are theoretical and attack-model-conditional. They do not establish a practical break, a quantum security bound, or standards withdrawal. They are distinct from this lab's demonstrated leaf-reuse forgery.
