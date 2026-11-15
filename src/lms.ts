@@ -4,7 +4,9 @@
  * The hash-chain and Merkle operations are real. HSS uses a custom signed-key
  * transcript and reduced demo heights, not an interoperable RFC wire format.
  * The LM-OTS core is validated
- * against RFC 8554 Appendix F Test Case 1 (see test/rfc8554-vectors.test.ts).
+ * against RFC 8554 Appendix F Test Case 1, which is the W8 parameter set
+ * (LMOTS_SHA256_N32_W8, p=34) rather than the W4 set the page signs with
+ * (see test/rfc8554-vectors.test.ts).
  *
  * Demo parameter set:
  *   LMS-SHA256-M32-H5  (n = 32, h = 5 -> 32 leaves per tree)

@@ -199,7 +199,7 @@ function renderApp(): string {
     <p>The conceptual foundation is the <strong>Lamport one-time signature</strong>. To sign a 1-bit message <em>b</em>: publish <code>H(sk_b)</code> as the public key. The signature is <code>sk_b</code> &mdash; the verifier checks <code>H(sk_b)</code> matches the published value. The key can only be used once: revealing <code>sk_0</code> to sign a <code>0</code> makes it impossible to later sign a <code>1</code> securely.</p>
     <p><strong>LM-OTS</strong> (the Winternitz one-time signature of RFC 8554 &sect;4 &mdash; a relative of, but not the same scheme as, XMSS/SLH-DSA's WOTS+) generalizes this using hash chains. Per the RFC &sect;4.5 signature-generation algorithm: <code>sig[i] = chain(sk[i], 0, a[i])</code> where <code>a[i]</code> is the <em>i</em>-th <em>w</em>-bit coefficient of the message hash. Verification completes the chain: <code>chain(sig[i], a[i], 2^w&minus;1&minus;a[i])</code> must recover <code>pk[i]</code>.</p>
     <div class="chain-primer">
-      <p class="chain-primer-caption">A hash chain is a one-way street. Repeatedly hashing turns a secret <code>sk</code> into a public <code>pk</code> over 2<sup>w</sup>=16 steps. You can always walk <em>forward</em> (hash again), but never <em>backward</em>. Signing publishes one node partway along (here, step&nbsp;9); the verifier hashes it forward to <code>pk</code>, while everything below stays secret:</p>
+      <p class="chain-primer-caption">A hash chain is a one-way street. Repeatedly hashing turns a secret <code>sk</code> into a public <code>pk</code> over 2<sup>w</sup>&minus;1 = 15 hash steps (16 positions, 0 to 15). You can always walk <em>forward</em> (hash again), but never <em>backward</em>. Signing publishes one node partway along (here, step&nbsp;9); the verifier hashes it forward to <code>pk</code>, while everything below stays secret:</p>
       ${renderChainDiagram([{ i: 0, a1: 9 }], 'sign')}
       ${chainLegend('sign')}
     </div>
@@ -391,7 +391,7 @@ function renderApp(): string {
     <p>The challenge: generating all 2^h LM-OTS keypairs upfront (for h=20: 1 million computations). HSS solves this with a multi-level tree hierarchy so only the current leaf tree needs to be precomputed.</p>
   </div>
   <div class="card">
-    <h3>D2 &mdash; HSS structure (NIST SP 800-208 &sect;6)</h3>
+    <h3>D2 &mdash; HSS structure (RFC 8554 &sect;6)</h3>
     <div class="warn-box" id="hss-transcript-scope">
       <strong>Demo scope: non-interoperable teaching adaptation.</strong>
       The hash chains, Merkle paths, signing and verification below are real, but
@@ -400,7 +400,7 @@ function renderApp(): string {
       RFC 8554 &sect;5.3 and &sect;6 instead sign a 56-byte child public key with
       LMS and LM-OTS typecodes, I and the root hash. This lab retains the custom
       transcript even at supported heights; it does not export interoperable HSS wire formats
-      or establish NIST conformance. The LM-OTS Appendix F test validates that core only.
+      or establish NIST conformance. The LM-OTS Appendix F test validates that core only, and Test Case 1 is the W8 parameter set (LMOTS_SHA256_N32_W8, p=34), not the W4 set this page signs with.
     </div>
     <p>An HSS instance with L=2 levels:</p>
     <ul style="margin:0.5rem 0 0.85rem 1.5rem;line-height:2;font-size:0.88rem;">
@@ -444,7 +444,7 @@ function renderApp(): string {
   </div>
   <div class="card">
     <h3>E1 &mdash; CNSA 2.0</h3>
-    <p>The NSA's Commercial National Security Algorithm Suite 2.0 (published September 2022) requires LMS or XMSS for software and firmware signing in national security systems, with a transition deadline of 2025&ndash;2030 depending on system classification. CNSA 2.0 specifies LMS and XMSS as the only approved post-quantum signature schemes for these use cases &mdash; ML-DSA (Dilithium, FIPS 204) is approved for other signature uses but is <em>not</em> approved for firmware signing in CNSA 2.0 contexts.</p>
+    <p>The NSA's Commercial National Security Algorithm Suite 2.0 (published September 2022) names LMS and XMSS (NIST SP 800-208) as the algorithms for software and firmware signing in national security systems, with LMS SHA-256/192 recommended. They are not the only approved choice: NSA's <em>CNSA 2.0 and Quantum Computing FAQ</em> (Ver. 2.2, October 2026) says "Validated ML-DSA is approved for all signing use cases, and it may be the most appropriate choice for some software/firmware signing use cases". LMS and XMSS are the validated options that have been commercially available longer, so NSA wants the firmware transition to "begin now (using LMS and XMSS) whenever possible" rather than wait for ML-DSA.</p>
     <div class="info-box">The CNSA 2.0 guidance applies to National Security Systems (NSS) and contractors in the U.S. defense industrial base.</div>
   </div>
   <div class="card">
