@@ -54,8 +54,10 @@ Generate a 32-leaf LMS tree, sign messages one at a time, and watch the key stat
 - **CNSA 2.0** (NSA, September 2022): designates LMS and XMSS as the required post-quantum signature schemes for software and firmware signing in national security systems, with compliance deadlines from 2025.
 - **NIST SP 800-208**: the authoritative standard for LMS and HSS, specifying parameter sets, serialization formats, and state management requirements.
 - **UEFI Secure Boot (post-quantum transition)**: LMS is a candidate for next-generation UEFI firmware signing as the industry transitions away from RSA and ECDSA.
-- **OpenSSL and Bouncy Castle**: both libraries have implemented LMS/HSS, enabling use in Java and C applications for code signing pipelines.
+- **OpenSSL 3.6 and Bouncy Castle**: [OpenSSL 3.6](https://openssl-library.org/news/openssl-3.6-notes/) added LMS signature *verification only* — its [EVP_SIGNATURE-LMS](https://docs.openssl.org/3.6/man7/EVP_SIGNATURE-LMS/) page says "The OpenSSL providers only support LMS signature verification, as this is a SP 800-208 requirement for FIPS software modules"; there is no key generation or signing, and the code is compiled out unless OpenSSL is built with `enable-lms`. Bouncy Castle (Java) implements LMS/HSS in full — key generation, signing and verification (`LMSKeyPairGenerator`/`HSSKeyPairGenerator` and [`LMSSigner`](https://downloads.bouncycastle.org/java/docs/bcprov-jdk18on-javadoc/org/bouncycastle/crypto/signers/LMSSigner.html)/[`HSSSigner`](https://downloads.bouncycastle.org/java/docs/bcprov-jdk18on-javadoc/org/bouncycastle/crypto/signers/HSSSigner.html) under `org.bouncycastle.crypto`, plus the JCA `LMS` provider services), listed in its [specifications](https://www.bouncycastle.org/documentation/specification_interoperability/) against SP 800-208, RFC 8554 and RFC 8708.
 - **RFC 8554**: the IETF informational RFC documenting the LMS and HSS scheme that NIST SP 800-208 standardizes.
+
+**Sources reviewed 15 November 2026.** The library bullet above previously said both libraries "have implemented LMS/HSS ... for code signing pipelines". OpenSSL's own 3.6 documentation limits its support to verification, and neither vendor's documentation makes a code-signing-pipeline claim, so that phrase was dropped.
 
 ## How to Run Locally
 
