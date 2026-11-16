@@ -42,4 +42,24 @@ test('cited standards and parameter sets match the documents they name', async (
     'Validated ML-DSA is approved for all signing use cases',
   );
   await expect(cnsa).not.toContainText('only approved post-quantum signature schemes');
+
+  // CNSA 2.0 deadlines go by technology category, not system classification. The
+  // 2025/2030 pair is the advisory's software- and firmware-signing row: NSA,
+  // Announcing the Commercial National Security Algorithm Suite 2.0, PP-22-1338,
+  // Ver. 1.0, September 2022.
+  await expect(cnsa).toContainText('PP-22-1338, Ver. 1.0, September 2022');
+  await expect(cnsa).toContainText(
+    'support and prefer CNSA 2.0 by 2025, and exclusively use CNSA 2.0 by 2030',
+  );
+  await expect(cnsa).not.toContainText('depending on system classification');
+
+  // The CNSSP 15 acquisition dates are a separate timeline, from the FAQ above.
+  await expect(cnsa).toContainText(
+    'by January 1, 2027, CNSA 2.0 algorithms will be required in all new acquisitions for NSS',
+  );
+  await expect(cnsa).toContainText(
+    'By December 31, 2030, all NSS equipment and services that cannot support CNSA 2.0 must be phased out',
+  );
+  await expect(cnsa).toContainText('By December 31, 2031, CNSA 2.0 algorithms are mandated for use');
+  await expect(cnsa).toContainText('specific deadlines are dependent on equipment type');
 });
