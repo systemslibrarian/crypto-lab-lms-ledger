@@ -14,6 +14,7 @@
  * Reference: https://www.rfc-editor.org/rfc/rfc8554#appendix-F
  */
 
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { fromHex, toHex, lmotsRecoverK, otsChainCount, coef, checksum } from '../src/lms.ts';
 
@@ -117,5 +118,32 @@ describe('coefficient extraction and checksum internals', () => {
     expect(toHex(checksum(zero, 8))).toBe('1fe0');
     // For w=4, n=32: u=64, maxDigit=15, ls=4 -> (64*15)<<4 = 960<<4 = 15360 = 0x3C00.
     expect(toHex(checksum(zero, 4))).toBe('3c00');
+  });
+});
+
+describe('where the domain-separation constants are cited from', () => {
+  // src/lms.ts credited them to "Table 4 / Section 4". RFC 8554's Table 4 is
+  // the IANA "LM-OTS Signatures" registry — LMOTS_SHA256_N32_W1 through W8 and
+  // their numeric identifiers — and has nothing to do with D. The four values
+  // are listed together in §7.1 "Security String", and used in §4.3 and
+  // §4.5/§4.6 (D_PBLC, D_MESG) and §5.3 and §5.4.2 (D_LEAF, D_INTR).
+  const source = readFileSync(new URL('../src/lms.ts', import.meta.url), 'utf8');
+
+  it('does not credit the constants to Table 4 or to Section 4 alone', () => {
+    expect(source).not.toContain('(Table 4 / Section 4)');
+    expect(source).toContain('Table 4 is the IANA "LM-OTS Signatures" registry');
+  });
+
+  it('names §7.1 and the sections that use each constant', () => {
+    expect(source).toContain('§7.1 "Security String"');
+    expect(source).toContain('§4.3 and §4.5/§4.6 (D_PBLC, D_MESG)');
+    expect(source).toContain('§5.3 and\n// §5.4.2 (D_LEAF, D_INTR)');
+  });
+
+  it('leaves the constants themselves alone', () => {
+    expect(source).toContain('const D_PBLC = 0x8080;');
+    expect(source).toContain('const D_MESG = 0x8181;');
+    expect(source).toContain('const D_LEAF = 0x8282;');
+    expect(source).toContain('const D_INTR = 0x8383;');
   });
 });

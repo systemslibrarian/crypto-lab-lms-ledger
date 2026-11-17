@@ -105,7 +105,12 @@ export function otsChainCount(w: number): number {
   return u + v;
 }
 
-// RFC 8554 domain-separation constants (Table 4 / Section 4).
+// RFC 8554 domain-separation constants. All four are listed together in
+// §7.1 "Security String", which gives D as "a two-byte identifier that takes
+// on different values in the different contexts in which the hash function is
+// invoked"; they are used in §4.3 and §4.5/§4.6 (D_PBLC, D_MESG) and §5.3 and
+// §5.4.2 (D_LEAF, D_INTR). Table 4 is the IANA "LM-OTS Signatures" registry of
+// numeric identifiers, not these constants.
 const D_PBLC = 0x8080;
 const D_MESG = 0x8181;
 const D_LEAF = 0x8282;
